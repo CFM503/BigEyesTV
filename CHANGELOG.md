@@ -4,6 +4,19 @@
 
 ---
 
+## [v1.0.2] - 2026-08-18 (固定签名与真实发布物闭环)
+
+### 🌟 新增与改进特性
+* **专用固定签名配置 (覆盖安装保障)**:
+  - 引入专用的 RSA 2048 签名证书 (`bigeyes-release.jks`, 有效期至 2054 年)，彻底废弃构建环境临时 debug 签名；
+  - 在 `build.gradle.kts` 中固定配置 `key.properties` 签名索引机制，保证后续无论在何种构建环境发布，新旧 APK 签名绝对一致，支持直接无缝覆盖安装更新；
+  - 证书私钥与密码严格通过 `.gitignore` 排除，提供 `key.properties.example` 配置模板。
+* **正式 Release 构建产物**:
+  - 构建生成正式签名的 `BigEyesTV-v1.0.2-release.apk` (APK Signature Scheme v2)；
+  - 作为 GitHub Release Asset 发布，打通自动更新的下载与安装链路闭环。
+
+---
+
 ## [v1.0.1] - 2026-08-18 (电视可用性与自动更新发布)
 
 ### ⚠️ 验证状态说明 (诚实性修正)

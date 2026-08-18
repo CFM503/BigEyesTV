@@ -1,0 +1,6 @@
+# Sample signing configuration for BigEyes-TV release APK builds
+# Copy this file to `key.properties` and fill in your keystore path and passwords.
+storeFile=../keystore/bigeyes-release.jks
+storePassword=your_keystore_password
+keyAlias=your_key_alias
+keyPassword=your_key_password

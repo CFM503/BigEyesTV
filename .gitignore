@@ -11,3 +11,9 @@ local.properties
 app/build/
 *.apk
 *.aab
+
+# Keystore and signing credentials
+*.jks
+*.keystore
+keystore/
+key.properties
