@@ -1,0 +1,58 @@
+name: Build and Publish Release APK
+
+on:
+  push:
+    tags:
+      - 'bigeyes-tv-v*'
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Restore Keystore and Signing Config
+        run: |
+          mkdir -p keystore
+          echo "${{ secrets.KEYSTORE_BASE64 || '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' }}" | base64 --decode > keystore/bigeyes-release.jks
+          cat <<EOF > key.properties
+          storeFile=../keystore/bigeyes-release.jks
+          storePassword=bigeyes2026tv
+          keyAlias=bigeyes-key
+          keyPassword=bigeyes2026tv
+          EOF
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build Release APK
+        run: ./gradlew assembleRelease --stacktrace
+
+      - name: Create GitHub Release and Upload APK
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: app/build/outputs/apk/release/BigEyesTV-*.apk
+          name: BigEyes-TV ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
