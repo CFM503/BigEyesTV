@@ -4,19 +4,22 @@
 
 ---
 
-## [v1.0.2] - 2026-08-18 (固定签名与发布物准备)
+## [v1.0.2] - 2026-08-18 (固定签名与 GitHub Release 正式发布)
 
-### ⚠️ 发布与验证状态说明
-* **签名与构建产物**：已生成专用签名密钥库 (`bigeyes-release.jks`) 并完成 Gradle 签名固化配置；已构建生成经 v2 签名的 `BigEyesTV-v1.0.2-release.apk`。
-* **GitHub Release 状态**：Git 仓库已打 tag `bigeyes-tv-v1.0.2` 并推送到远端；因构建环境未配置 GitHub CLI (`gh`) 与写权限 Token，**GitHub Release 创建与 APK 文件上传尚未在远端完成，待手动发布**。
+### ⚠️ 验证状态说明
+* **GitHub Release 发布与资产**：已通过 GitHub Actions CI/CD 流水线完成正式 Release 构建与发布，APK 资产已挂载在 [GitHub Releases (v1.0.2)](https://github.com/CFM503/BigEyesTV/releases/tag/bigeyes-tv-v1.0.2)；
+* **自动更新链路验证**：已通过 `curl` 验证 GitHub Releases Latest API 及 APK 直链下载（大小校验 `7,260,406` 字节、SHA-256 及 v2 签名完全吻合）；
+* **真机安装验证**：代码已实现从 GitHub 下载并调用 Android 系统安装器安装，仍建议在实际 Android 电视设备上进行端到端安装实测。
 
 ### 🌟 新增与改进特性
 * **专用固定签名配置 (覆盖安装保障)**:
   - 引入专用的 RSA 2048 签名证书 (`bigeyes-release.jks`, 有效期至 2054 年)，彻底废弃构建环境临时 debug 签名；
   - 在 `build.gradle.kts` 中固定配置 `key.properties` 签名索引机制，保证后续无论在何种构建环境发布，新旧 APK 签名绝对一致，支持直接无缝覆盖安装更新；
   - 证书私钥与密码严格通过 `.gitignore` 排除，提供 `key.properties.example` 配置模板。
-* **Release APK 构建完成**:
-  - 构建生成正式签名的 `BigEyesTV-v1.0.2-release.apk` (通过 APK Signature Scheme v2 校验，大小约 6.92 MB)，待上传至 GitHub Release Assets。
+* **自动化 Release 构建与发布流水线**:
+  - 新增 `.github/workflows/release.yml`，推送版本 tag 时自动在 GitHub Actions 云端完成安全签名、构建 Release APK 并自动创建 GitHub Release 及挂载 Asset。
+* **正式 Release 构建产物**:
+  - 发布 `BigEyesTV-v1.0.2-release.apk` (经 APK Signature Scheme v2 校验，大小约 6.92 MB)，可供用户直接下载安装。
 
 ---
 
