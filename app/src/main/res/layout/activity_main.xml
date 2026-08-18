@@ -112,6 +112,15 @@
                 android:textColor="@color/text_secondary"
                 android:textSize="14sp" />
 
+            <TextView
+                android:id="@+id/tvVersion"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="当前版本：v1.0.1"
+                android:textColor="@color/text_secondary"
+                android:textSize="14sp" />
+
         </LinearLayout>
 
         <TextView

@@ -4,19 +4,47 @@
 
 ---
 
-## [v0.1.0] - 2026-08-18 (首个功能完整版)
+## [v1.0.1] - 2026-08-18 (电视可用性与自动更新发布)
 
-### 🌟 新增功能
+### ⚠️ 验证状态说明 (诚实性修正)
+* **AirPlay 视频播放协议**：已通过自动化单元测试与 `curl` 模拟请求（含真实 `bplist00` 二进制载荷）验证了 HTTP 播控接口与 Plist 编解码逻辑，**尚未经过 iPhone 真机设备在真实局域网内的 AirPlay 发现与投屏验证**。
+* **DLNA 协议**：已通过单元测试验证了 SSDP 广播与 UPnP 描述/SOAP 指令，**尚未进行多品牌 Android 手机真机全面兼容性验证**。
+* **GitHub 自动更新**：已通过单元测试验证版本比较与清洗算法，真机环境未实际访问外网 GitHub Release API 进行端到端下载安装实测。
+
+### 🌟 新增与改进特性
+* **电视可用性与遥控器交互适配**:
+  - 全面支持 Android TV D-pad 遥控器键值响应（返回键退出全屏返回待机、确认/播放暂停键播控、左右方向键快进/快退 10 秒）；
+  - `AndroidManifest.xml` 声明 Leanback 特性与 `LEANBACK_LAUNCHER` 分类及 `android:banner`，确保可在 Android TV 原生桌面展示与无触控运行；
+  - 待机界面直观展示当前版本号（`v1.0.1`）。
+* **开机自启动支持**:
+  - 新增 `BootReceiver` 监听 `BOOT_COMPLETED` 及快速开机广播，电视开机后自动拉起 `TvReceiverService` 后台前台服务，无需用户手动打开 App 即可随时接收投屏。
+* **动态前台通知状态更新**:
+  - `TvReceiverService` 接入 `TvPlayerListener`，实时更新系统通知栏状态（等待投屏 / 正在播放 / 播放就绪 / 缓冲中，附带本地 IP 与端口）。
+* **GitHub Releases 自动检查更新能力**:
+  - 启动时异步请求 GitHub Releases API (`https://api.github.com/repos/CFM503/BigEyesTV/releases/latest`)；
+  - 实现语义化版本号清洗与比较算法；
+  - 发现新版本时弹出遥控器友好的提示弹窗，支持一键下载 APK 并通过 `FileProvider` + `REQUEST_INSTALL_PACKAGES` 调起系统安装器；
+  - 具备完善的弱网、超时与 HTTP 403 异常防护，绝不阻塞或崩溃。
+
+---
+
+## [v0.1.0] - 2026-08-18 (首个开发预览版)
+
+### ⚠️ 验证状态说明
+* **AirPlay 视频播放协议**：已通过自动化单元测试与 `curl` 模拟请求（含真实 `bplist00` 二进制载荷）验证了 HTTP 播控接口与 Plist 编解码逻辑，**尚未经过 iPhone 真机设备在真实局域网内的 AirPlay 发现与投屏验证**。
+* **DLNA 协议**：已通过单元测试验证了 SSDP 广播与 UPnP 描述/SOAP 指令，**尚未进行多品牌 Android 手机真机全面兼容性验证**。
+
+### 🌟 新增功能 (代码已实现，待真机验证)
 * **Apple AirPlay 视频播放接收端 (AirPlay Video Playback)**:
-  - 基于 Android 原生 `NsdManager` + `MulticastLock` 实现 Bonjour/mDNS `_airplay._tcp.` 服务广播与设备发现；
-  - 广播标准 Apple TV TXT 属性（`features=0x7`、`model=AppleTV2,1`、`srcvers=130.14`、`deviceid` 伪 MAC 固定持久化）；
-  - 引入 `dd-plist` (v1.30) 库，完整支持现代 iOS 发送的 Binary Plist (`bplist00`) 与标准 XML Plist 编解码；
-  - 内嵌 NanoHTTPD 服务实现完整 AirPlay HTTP 播控接口：`/server-info`、`/play`、`/playback-info`、`/rate`、`/scrub`、`/stop`、`/reverse`。
+  - 基于 Android 原生 `NsdManager` + `MulticastLock` 广播 `_airplay._tcp.` 服务；
+  - 广播 Apple TV TXT 属性（`features=0x7`、`model=AppleTV2,1`、`srcvers=130.14`、`deviceid` 散列伪 MAC 持久化）；
+  - 引入 `dd-plist` (v1.30) 库，实现 Binary Plist (`bplist00`) 与 XML Plist 编解码；
+  - 内嵌 NanoHTTPD 服务实现 AirPlay HTTP 播控接口：`/server-info`、`/play`、`/playback-info`、`/rate`、`/scrub`、`/stop`、`/reverse`。
 * **DLNA / UPnP MediaRenderer 接收端**:
-  - 自建 UDP 1900 多播 SSDP 服务，支持 `ssdp:alive`、`ssdp:byebye` 及 `M-SEARCH` 响应；
-  - 完整实现 UPnP 设备描述 (`/description.xml`) 与 AVTransport SOAP 播控接口（`SetAVTransportURI`、`Play`、`Pause`、`Seek`、`Stop`、`GetPositionInfo`、`GetTransportInfo`）。
-* **统一 ExoPlayer 全屏播放引擎**:
-  - 底层使用 Media3 / ExoPlayer 支持 HLS (`.m3u8`)、MP4、DASH 等格式自适应拉流；
-  - AirPlay 与 DLNA 共享同一套 `TvPlayerManager`，UI 保持无缝全屏播放体验与待机信息面板。
-* **息屏与后台保活支持**:
-  - `TvReceiverService` 前台服务常驻，持有 `PARTIAL_WAKE_LOCK` 与 `WifiLock`，防止电视息屏时网络降频或休眠。
+  - UDP 1900 多播 SSDP 服务，支持 `ssdp:alive`、`ssdp:byebye` 及 `M-SEARCH` 响应；
+  - 实现 UPnP 设备描述 (`/description.xml`) 与 AVTransport SOAP 播控接口（`SetAVTransportURI`、`Play`、`Pause`、`Seek`、`Stop`、`GetPositionInfo`、`GetTransportInfo`）。
+* **统一 ExoPlayer 播放控制**:
+  - 底层使用 Media3 / ExoPlayer 支持 HLS (`.m3u8`)、MP4、DASH 等自适应拉流；
+  - AirPlay 与 DLNA 共享同一套 `TvPlayerManager`。
+* **后台保活与锁机制**:
+  - `TvReceiverService` 前台服务常驻，持有 `PARTIAL_WAKE_LOCK` 与 `WifiLock`。

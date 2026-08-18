@@ -17,12 +17,14 @@ import androidx.core.app.NotificationCompat
 import com.bigeyes.tv.R
 import com.bigeyes.tv.airplay.AirPlayDiscoveryService
 import com.bigeyes.tv.dlna.SsdpServer
+import com.bigeyes.tv.player.PlayerState
+import com.bigeyes.tv.player.TvPlayerListener
 import com.bigeyes.tv.player.TvPlayerManager
 import com.bigeyes.tv.server.TvHttpServer
 import com.bigeyes.tv.ui.MainActivity
 import com.bigeyes.tv.utils.NetworkUtils
 
-class TvReceiverService : Service() {
+class TvReceiverService : Service(), TvPlayerListener {
 
     private val binder = LocalBinder()
     private var httpServer: TvHttpServer? = null
@@ -31,6 +33,8 @@ class TvReceiverService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+
+    private lateinit var notificationManager: NotificationManager
 
     inner class LocalBinder : Binder() {
         fun getService(): TvReceiverService = this@TvReceiverService
@@ -41,20 +45,70 @@ class TvReceiverService : Service() {
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "TvReceiverService onCreate")
-        startForeground(NOTIFICATION_ID, createNotification())
+        notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        startForeground(NOTIFICATION_ID, buildNotification("等待投屏中", "AirPlay & DLNA 在线"))
         acquireLocks()
         startServers()
+
+        TvPlayerManager.getInstance(this).addListener(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val action = intent?.action
+        if (action == ACTION_STOP) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        updateNotificationStatus()
         return START_STICKY
     }
 
     override fun onDestroy() {
         Log.i(TAG, "TvReceiverService onDestroy")
+        TvPlayerManager.getInstance(this).removeListener(this)
         stopServers()
         releaseLocks()
         super.onDestroy()
+    }
+
+    override fun onStateChanged(state: PlayerState) {
+        updateNotificationStatus()
+    }
+
+    override fun onPlaybackStarted(url: String) {
+        val title = "BigEyes TV 正在播放"
+        val text = "正在投屏: $url"
+        notificationManager.notify(NOTIFICATION_ID, buildNotification(title, text))
+    }
+
+    override fun onPlaybackStopped() {
+        updateNotificationStatus()
+    }
+
+    override fun onError(error: String) {
+        val title = "BigEyes TV 播放出错"
+        val text = "错误信息: $error"
+        notificationManager.notify(NOTIFICATION_ID, buildNotification(title, text))
+    }
+
+    private fun updateNotificationStatus() {
+        val player = TvPlayerManager.getInstance(this)
+        val ip = NetworkUtils.getLocalIpAddress()
+        val (title, text) = when {
+            player.isPlaying() -> {
+                "BigEyes TV 正在播放" to "正在投屏播放 | 来源: ${player.currentUrl ?: "流媒体"}"
+            }
+            player.currentState == PlayerState.READY -> {
+                "BigEyes TV 播放就绪" to "已加载视频 | http://$ip:$SERVER_PORT"
+            }
+            player.currentState == PlayerState.BUFFERING -> {
+                "BigEyes TV 缓冲中..." to "正在缓冲流媒体数据"
+            }
+            else -> {
+                "BigEyes TV 投屏服务运行中" to "等待投屏中 | http://$ip:$SERVER_PORT"
+            }
+        }
+        notificationManager.notify(NOTIFICATION_ID, buildNotification(title, text))
     }
 
     private fun startServers() {
@@ -130,6 +184,7 @@ class TvReceiverService : Service() {
             val wifiMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 WifiManager.WIFI_MODE_FULL_LOW_LATENCY
             } else {
+                @Suppress("DEPRECATION")
                 WifiManager.WIFI_MODE_FULL_HIGH_PERF
             }
             wifiLock = wifiManager?.createWifiLock(wifiMode, "BigEyesTV::WifiLock")?.apply {
@@ -160,18 +215,14 @@ class TvReceiverService : Service() {
         }
     }
 
-    private fun createNotification(): Notification {
-        val channelId = "bigeyes_tv_channel"
-        val notificationManager =
-            getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-
+    private fun buildNotification(title: String, text: String): Notification {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                channelId,
+                CHANNEL_ID,
                 "BigEyes TV 投屏接收服务",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "保持后台投屏服务持续运行"
+                description = "显示投屏与播放状态"
             }
             notificationManager.createNotificationChannel(channel)
         }
@@ -183,10 +234,9 @@ class TvReceiverService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        val ip = NetworkUtils.getLocalIpAddress()
-        return NotificationCompat.Builder(this, channelId)
-            .setContentTitle("BigEyes TV 投屏服务运行中")
-            .setContentText("AirPlay & DLNA 在线 | http://$ip:$SERVER_PORT")
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle(title)
+            .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
@@ -196,10 +246,15 @@ class TvReceiverService : Service() {
     companion object {
         private const val TAG = "TvReceiverService"
         const val SERVER_PORT = 7000
+        const val ACTION_START = "com.bigeyes.tv.action.START"
+        const val ACTION_STOP = "com.bigeyes.tv.action.STOP"
+        private const val CHANNEL_ID = "bigeyes_tv_channel"
         private const val NOTIFICATION_ID = 1001
 
         fun start(context: Context) {
-            val intent = Intent(context, TvReceiverService::class.java)
+            val intent = Intent(context, TvReceiverService::class.java).apply {
+                action = ACTION_START
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
             } else {
@@ -208,7 +263,10 @@ class TvReceiverService : Service() {
         }
 
         fun stop(context: Context) {
-            context.stopService(Intent(context, TvReceiverService::class.java))
+            val intent = Intent(context, TvReceiverService::class.java).apply {
+                action = ACTION_STOP
+            }
+            context.stopService(intent)
         }
     }
 }

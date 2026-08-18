@@ -122,6 +122,15 @@ class TvPlayerManager private constructor(private val context: Context) {
         }
     }
 
+    fun togglePlayPause() {
+        runOnMain {
+            val player = exoPlayer ?: return@runOnMain
+            val shouldPlay = !player.isPlaying
+            player.playWhenReady = shouldPlay
+            Log.i(TAG, "Toggle play/pause: isPlaying now -> $shouldPlay")
+        }
+    }
+
     fun seekTo(positionMs: Long) {
         Log.i(TAG, "SeekTo request received: $positionMs ms")
         runOnMain {
