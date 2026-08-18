@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">BigEyes TV</string>
+    <string name="standby_title">BigEyes TV 投屏接收端</string>
+    <string name="standby_subtitle">支持 Apple AirPlay 与 DLNA 无线投屏</string>
+    <string name="standby_ip_label">设备 IP 地址：</string>
+    <string name="standby_instructions">投屏指南：\n1. 确保手机与电视连接在同一 Wi-Fi 下；\n2. iPhone 打开控制中心或视频播放器，点击 AirPlay 隔空播放选择本设备；\n3. Android 手机或腾讯/爱奇艺/B站等 App，点击 投屏(TV) 图标选择本设备。</string>
+    <string name="status_dlna_online">DLNA 服务：在线</string>
+    <string name="status_airplay_online">AirPlay 视频服务：在线</string>
+</resources>

@@ -1,0 +1,216 @@
+================================================================================
+           BigEyes-TV 新增 AirPlay 视频投屏 (AirPlay Video Playback) 技术调研报告
+================================================================================
+
+一、调研背景与范围定义
+
+1. 范围明确（杜绝过度设计）
+AirPlay 协议在 Apple 生态中包含两种截然不同的模式：
+- ❌ AirPlay Mirroring（屏幕镜像）：将手机屏幕实时以 H.264 编码推流，涉及 RTSP、FairPlay DRM 握手、AES 解密、低延迟音画硬同步，工程量极大。本项目不做此模式。
+- ✅ AirPlay Video Playback（视频播放投屏）：iPhone 上的 Safari / 视频 App（如腾讯、爱奇艺、B站等）点击 AirPlay 图标，仅向接收端发送视频流真实 URL（.m3u8 或 .mp4）与播放控制指令。接收端利用自带的 ExoPlayer 自行拉流解码。本项目完整实现此模式。
+
+
+二、mDNS / Bonjour 服务广播规范
+
+iPhone 仅在局域网内搜索到了合法的 Bonjour 服务后，才会在系统的 AirPlay 设备列表中展示该接收端。
+
+1. 基础服务参数
+- 服务类型 (Service Type): _airplay._tcp.（协议标准类型）
+- 传输协议 (Protocol): DNS-SD (mDNS)
+- 默认端口 (Port): 7000（或复用 NanoHTTPD 的监听端口）
+- 服务名称 (Service Name): bigeyes-tv（或自定义设备名）
+
+2. TXT Record 键值对详细定义
+--------------------------------------------------------------------------------
+键名 (Key)    | 类型        | 推荐配置值          | 作用与含义
+--------------------------------------------------------------------------------
+deviceid      | String      | 58:55:CA:1A:E2:88   | 设备唯一标识，必须符合 MAC 地址格式（6组16进制大写冒号分隔）。Android 端可通过网卡 MAC 或 Android ID 散列生成固定值。
+features      | Hex String  | 0x7 或 0x1e 或 0x39f7| 核心功能特性掩码（详见下文 Bitmask 分析）。告知 iPhone 仅支持免密视频/图片流播放。
+model         | String      | AppleTV2,1 或 3,2   | 模拟的目标设备型号。设置为标准 AppleTV 型号以触发 iOS 原生直连逻辑。
+srcvers       | String      | 130.14 或 220.68    | AirPlay 协议版本号。
+protovers     | String      | 1.0                 | 协议主版本号。
+flags         | Hex String  | 0x4 或 0x0          | 状态标记位（0x4 表示音频通道处于就绪状态）。
+vv            | String      | 2                   | 协议衍生版本号。
+--------------------------------------------------------------------------------
+
+3. features 特性掩码位深度分析
+AirPlay 特征位决定了 iPhone 对接收端的能力判定：
+- Bit 0 (0x1) Video：支持视频播放（必须置 1）。
+- Bit 1 (0x2) Photo：支持图片投屏。
+- Bit 4 (0x10) VideoHTTPLiveStreams：支持 HLS (.m3u8) 直播/点播流。
+- Bit 7 (0x80) Screen Mirroring：屏幕镜像（必须置 0，避免 iPhone 误判为镜像设备并启动 RTSP 握手）。
+- Bit 14 (0x4000) FairPlay Auth / Bit 23 RSA Auth / Bit 43/46/48 各种配对认证：必须全部置 0，以保证 iPhone 不会弹出 PIN 码输入框或要求私钥协商。
+- 结论：配置为 0x7、0x1e 或 0x39f7 是经过 Kodi / UxPlay 等成熟开源项目长期验证的最稳妥配置。
+
+
+三、HTTP 接口与 Plist 数据格式规范
+
+当 iPhone 发现设备并触发投屏后，会发起基于 HTTP/1.1 的 REST 控制请求。
+
+1. 核心 HTTP 接口定义
+
+(1) GET /server-info（设备属性探测）
+- 触发时机：iPhone 选定设备后的首次握手。
+- 请求示例：
+  GET /server-info HTTP/1.1
+  User-Agent: MediaControl/1.0
+  X-Apple-Device-ID: 0xdc2b61a0ce79
+- 响应要求：HTTP/1.1 200 OK，Content-Type: text/x-apple-plist+xml
+- 响应 Body (XML Plist)：
+  <?xml version="1.0" encoding="UTF-8"?>
+  <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+  <plist version="1.0">
+  <dict>
+      <key>deviceid</key>
+      <string>58:55:CA:1A:E2:88</string>
+      <key>features</key>
+      <integer>7</integer>
+      <key>model</key>
+      <string>AppleTV2,1</string>
+      <key>protovers</key>
+      <string>1.0</string>
+      <key>srcvers</key>
+      <string>130.14</string>
+  </dict>
+  </plist>
+
+(2) POST /play（视频开播）
+- 触发时机：iPhone 发起视频流播放。
+- 请求格式兼容：
+  * 旧版 iOS：Content-Type: text/parameters（纯文本）
+    Content-Location: http://example.com/video.m3u8
+    Start-Position: 0.154000
+  * 现代 iOS (iOS 10~18)：Content-Type: application/x-apple-binary-plist（Binary Plist 二进制格式，以 bplist00 开头）。
+- 核心提取字段：
+  * Content-Location (String)：视频真实播放 URL。
+  * Start-Position (Float/Real)：起播进度（0.0 ~ 1.0 比例或秒数）。
+- 响应要求：HTTP/1.1 200 OK（空 Body）。
+- 执行动作：服务端解析出 Content-Location，直接交由 ExoPlayer 准备并开播。
+
+(3) GET /playback-info（播放状态心跳轮询）
+- 触发时机：播放期间 iPhone 周期性轮询（约每秒一次），用于同步 iPhone 锁屏控制台的进度条和播放按钮。
+- 响应要求：HTTP/1.1 200 OK，Content-Type: text/x-apple-plist+xml
+- 响应 Body (XML Plist 模板)：
+  <?xml version="1.0" encoding="UTF-8"?>
+  <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+  <plist version="1.0">
+  <dict>
+      <key>duration</key>
+      <real>3600.000000</real>
+      <key>position</key>
+      <real>124.500000</real>
+      <key>rate</key>
+      <real>1.000000</real>
+      <key>readyToPlay</key>
+      <true/>
+      <key>playbackBufferEmpty</key>
+      <false/>
+      <key>playbackBufferFull</key>
+      <true/>
+      <key>playbackLikelyToKeepUp</key>
+      <true/>
+      <key>loadedTimeRanges</key>
+      <array>
+          <dict>
+              <key>duration</key>
+              <real>3600.000000</real>
+              <key>start</key>
+              <real>0.000000</real>
+          </dict>
+      </array>
+      <key>seekableTimeRanges</key>
+      <array>
+          <dict>
+              <key>duration</key>
+              <real>3600.000000</real>
+              <key>start</key>
+              <real>0.000000</real>
+          </dict>
+      </array>
+  </dict>
+  </plist>
+  *(注：duration 为总时长秒数，position 为当前播放秒数，rate 处于播放时为 1.0，暂停时为 0.0)*
+
+(4) POST /rate?value=[float]（播放/暂停控制）
+- 触发时机：iPhone 点击暂停或继续播放。
+- 参数形式：URL Query 参数，value=0.000000（暂停）或 value=1.000000（继续播放）。
+- 响应要求：HTTP/1.1 200 OK。
+- 执行动作：调用 ExoPlayer.pause() 或 ExoPlayer.play()。
+
+(5) POST /scrub?position=[float]（进度拖拽 Seek）
+- 触发时机：iPhone 拖动进度条。
+- 参数形式：URL Query 参数，position=450.500000（跳转目标秒数）。
+- 响应要求：HTTP/1.1 200 OK。
+- 执行动作：调用 ExoPlayer.seekTo((long)(position * 1000))。
+
+(6) GET /scrub（获取当前跳转定位）
+- 响应要求：HTTP/1.1 200 OK，Content-Type: text/parameters
+- 响应 Body：
+  duration: 3600.000000
+  position: 124.500000
+
+(7) POST /stop（停止投屏）
+- 触发时机：iPhone 主动断开投屏或切换到其它设备。
+- 响应要求：HTTP/1.1 200 OK。
+- 执行动作：停止 ExoPlayer 并重置播放界面。
+
+(8) POST /reverse 及其他辅助接口
+- POST /reverse：客户端尝试建立反向事件信道。对于视频播放场景，直接返回 HTTP 200 OK 或 404 Not Found 均不会影响后续视频播放。
+- POST /setProperty / POST /getProperty：音量、字幕属性查询，容错返回 HTTP 200 OK 即可。
+
+2. Plist 数据解析与生成关键结论
+- 客户端发来的请求 (iPhone ➔ 接收端)：必须支持 Binary Plist (bplist00) 解码，因为现代 iOS 在 /play 中几乎 100% 发送二进制 Plist；同时做向下兼容（支持 text/parameters 与 XML Plist）。
+- 服务端返回的响应 (接收端 ➔ iPhone)：完全可以使用标准的 XML Plist (text/x-apple-plist+xml)。iOS 原生网络层对 XML Plist 响应支持极佳，无需在服务端构造复杂的二进制序列化。
+
+
+四、技术方案与依赖库选型
+
+1. 依赖库选型
+- mDNS 广播：
+  * 选型：Android 原生 android.net.nsd.NsdManager + NsdServiceInfo。
+  * 辅助保活：WifiManager.MulticastLock（防止 WiFi 芯片进入休眠丢弃多播包）。
+  * 依赖增加：0 额外依赖。
+- Plist 解析库：
+  * 选型：com.googlecode.plist:dd-plist:1.30（Maven Central 官方托管）。
+  * 体积与性能：纯 Java 编写，无 JNI，体积仅 ~100KB，专为解析 Apple 的 Binary Plist (bplist00)、XML Plist 和 ASCII Plist 设计，性能极其优异。
+
+2. 现有架构复用设计
+- NanoHTTPD 路由复用：直接在现有的 NanoHTTPD 请求分发入口处（serve() 方法）拦截 /server-info、/play、/playback-info、/rate、/scrub、/stop 等 AirPlay 路由，不单独另起 HTTP 端口。
+- ExoPlayer 统一播控：
+  * AirPlay 的 /play 抽取出的 Content-Location 与 DLNA SetAVTransportURI 抽取出的视频 URL 完全一致；
+  * AirPlay 的 /rate、/scrub、/stop 与 DLNA 的 Play、Pause、Seek、Stop 直接调用同一套播放器管理器（PlayerManager）；
+  * UI 层保持单一全屏播放器，用户完全无需感知是 DLNA 还是 AirPlay 投屏。
+
+
+五、工作量评估 (对比 DLNA)
+
+--------------------------------------------------------------------------------
+比较维度        | DLNA / UPnP 协议                               | AirPlay Video 协议                             | 评估对比
+--------------------------------------------------------------------------------
+局域网发现      | SSDP 多播（需自建 UDP Socket 监听 1900 端口）   | mDNS 广播（Android 原生 NsdManager，系统级管理） | AirPlay 更简洁稳定
+数据载荷格式    | 复杂且臃肿的 SOAP XML（包含 Envelope、转义 XML）| 标准 HTTP REST + Plist（简洁的键值字典）        | AirPlay 逻辑更轻量
+状态同步机制    | GENA 事件订阅机制或客户端周期轮询               | GET /playback-info 周期性轮询                  | 复杂度基本持平
+播放器对接      | URL -> ExoPlayer                               | URL -> ExoPlayer                               | 100% 共享一套逻辑
+代码量预估      | 约 500 ~ 600 行                                | 约 350 ~ 450 行                                | 与 DLNA 相当，略微更少
+--------------------------------------------------------------------------------
+
+
+六、权威参考资料与依据
+
+1. openairplay/airplay-spec：全球最权威的社区 AirPlay 逆向协议公开规范。
+2. Kodi (XBMC) 开源项目：xbmc/network/AirPlayServer.cpp 与 Zeroconf.cpp 经过数亿次实测验证的 AirPlay 视频投屏实现。
+3. UxPlay / RPiPlay：主流嵌入式 AirPlay 接收端开源项目。
+4. dd-plist：Java 领域最成熟的 Apple Property List 解析标准库。
+
+
+七、验证手段设计
+
+1. iPhone 真机验证（最终验收标准）：
+   - 打开 Safari 播放在线视频 / 打开视频 App；
+   - 点击控制中心或播放器内的 AirPlay 图标；
+   - 确认列表中出现 bigeyes-tv；
+   - 点击投屏，确认电视端自动拉起全屏开播，iPhone 端进度条、暂停、拖拽 Seek 正常响应。
+2. mDNS 广播探测（无 iPhone 时的前置验证）：
+   - 在同局域网的 PC/Mac/手机上使用 dns-sd -B _airplay._tcp 或 mDNS 浏览器工具（如 Discovery DNS-SD Browser），确认能扫描到 bigeyes-tv 且 TXT 属性完整。
+3. HTTP 接口自动化单测（协议级白盒验证）：
+   - 构造单元测试或脚本模拟发送 GET /server-info、POST /play（携带真实 bplist00 数据）、GET /playback-info，断言 HTTP 状态码、XML 响应以及 ExoPlayer 的回调行为。
