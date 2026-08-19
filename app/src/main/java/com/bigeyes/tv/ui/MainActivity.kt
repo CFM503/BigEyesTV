@@ -142,6 +142,7 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
         super.onResume()
         updateDeviceInfo()
         playerManager.attachPlayerView(binding.playerView)
+        updateManager.checkAndResumePendingInstall(this)
     }
 
     override fun onDestroy() {

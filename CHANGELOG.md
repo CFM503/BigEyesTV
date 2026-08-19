@@ -4,6 +4,23 @@
 
 ---
 
+## [v1.0.3] - 2026-08-19 (在线自动更新安装与签名架构全方位加固)
+
+### 🌟 改进与修复 (参考 `CFM503/bigeyes` 核心修复)
+* **未知应用授权返回后自动继续安装 (Lifecycle 恢复机制)**:
+  - 接入 `Application.ActivityLifecycleCallbacks` 监听 `onActivityResumed`；
+  - 当 Android 8.0+ 引导用户前往“允许安装未知应用”设置项并返回时，自动检测权限并无缝调起安装，无需用户重新点击下载。
+* **PackageInstaller 与 FileProvider 权限显式赋权**:
+  - `file_paths.xml` 调整为支持所有子目录与缓存根路径映射；
+  - 对系统所有匹配的安装器 Activity 执行 `grantUriPermission` 显式授权，并补充 `FLAG_GRANT_WRITE_URI_PERMISSION` 与 `EXTRA_NOT_UNKNOWN_SOURCE`，彻底解决部分 Android 电视盒子（小米、索尼、当贝等）报“解析安装包出错”或权限拦截的问题。
+* **签名配置与双签名架构加固**:
+  - `build.gradle.kts` 中显式固化 `enableV1Signing = true` 与 `enableV2Signing = true`，确保无论在任何 Android 版本上均满足签名校验要求；
+  - 内置 `app/keystore/bigeyes-release.jks` 缺省 fallback，确保任何本地环境与 CI 环境构建签名完全统一。
+* **本地安装包缓存加速**:
+  - 增加本地文件大小与远端 `Content-Length` 比对，已完整下载的 APK 直接调起安装，避免重复下载。
+
+---
+
 ## [v1.0.2] - 2026-08-18 (固定签名与 GitHub Release 正式发布)
 
 ### ⚠️ 验证状态说明

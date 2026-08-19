@@ -18,6 +18,12 @@ android {
 
     signingConfigs {
         create("release") {
+            enableV1Signing = true
+            enableV2Signing = true
+
+            val localKeystore = file("keystore/bigeyes-release.jks")
+            val rootKeystore = rootProject.file("keystore/bigeyes-release.jks")
+
             if (keystorePropertiesFile.exists()) {
                 val storeFilePath = keystoreProperties.getProperty("storeFile")
                 if (storeFilePath != null) {
@@ -26,6 +32,16 @@ android {
                 storePassword = keystoreProperties.getProperty("storePassword")
                 keyAlias = keystoreProperties.getProperty("keyAlias")
                 keyPassword = keystoreProperties.getProperty("keyPassword")
+            } else if (localKeystore.exists()) {
+                storeFile = localKeystore
+                storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "bigeyes2026tv"
+                keyAlias = System.getenv("KEY_ALIAS") ?: "bigeyes-key"
+                keyPassword = System.getenv("KEY_PASSWORD") ?: "bigeyes2026tv"
+            } else if (rootKeystore.exists()) {
+                storeFile = rootKeystore
+                storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "bigeyes2026tv"
+                keyAlias = System.getenv("KEY_ALIAS") ?: "bigeyes-key"
+                keyPassword = System.getenv("KEY_PASSWORD") ?: "bigeyes2026tv"
             }
         }
     }
@@ -34,8 +50,8 @@ android {
         applicationId = "com.bigeyes.tv"
         minSdk = 24
         targetSdk = 34
-        versionCode = 3
-        versionName = "1.0.2"
+        versionCode = 4
+        versionName = "1.0.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -43,18 +59,14 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            if (keystorePropertiesFile.exists()) {
-                signingConfig = signingConfigs.getByName("release")
-            }
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
         }
         debug {
-            if (keystorePropertiesFile.exists()) {
-                signingConfig = signingConfigs.getByName("release")
-            }
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 
