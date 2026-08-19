@@ -78,3 +78,10 @@
 ```
 
 构建生成的 APK 位于：`app/build/outputs/apk/debug/app-debug.apk`。
+
+---
+
+## 三、开源协议 (License)
+
+本项目采用 [MIT License](LICENSE) 协议开源。
+
