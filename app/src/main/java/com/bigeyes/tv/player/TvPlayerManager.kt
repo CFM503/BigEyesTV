@@ -27,6 +27,10 @@ class TvPlayerManager private constructor(private val context: Context) {
         private set
 
     @Volatile
+    var nextUrl: String? = null
+        private set
+
+    @Volatile
     var currentState: PlayerState = PlayerState.IDLE
         private set
 
@@ -41,6 +45,16 @@ class TvPlayerManager private constructor(private val context: Context) {
         val player = ExoPlayer.Builder(context).build()
         player.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_ENDED) {
+                    val next = nextUrl
+                    if (!next.isNullOrBlank()) {
+                        Log.i(TAG, "Current episode ended. Auto-advancing to preloaded next URL: $next")
+                        nextUrl = null
+                        play(next, 0L)
+                        return
+                    }
+                }
+
                 val newState = when (playbackState) {
                     Player.STATE_IDLE -> PlayerState.IDLE
                     Player.STATE_BUFFERING -> PlayerState.BUFFERING
@@ -138,9 +152,37 @@ class TvPlayerManager private constructor(private val context: Context) {
         }
     }
 
+    fun setPlaybackSpeed(speed: Float) {
+        Log.i(TAG, "SetPlaybackSpeed: $speed")
+        runOnMain {
+            exoPlayer?.setPlaybackSpeed(speed)
+        }
+    }
+
+    fun getPlaybackSpeed(): Float {
+        return exoPlayer?.playbackParameters?.speed ?: 1.0f
+    }
+
+    fun setNextUrl(url: String?) {
+        Log.i(TAG, "SetNextUrl received: $url")
+        nextUrl = url
+    }
+
+    fun playNext(): Boolean {
+        val next = nextUrl
+        if (!next.isNullOrBlank()) {
+            Log.i(TAG, "PlayNext triggered: $next")
+            nextUrl = null
+            play(next, 0L)
+            return true
+        }
+        return false
+    }
+
     fun stop() {
         Log.i(TAG, "Stop request received")
         currentUrl = null
+        nextUrl = null
         runOnMain {
             exoPlayer?.stop()
             exoPlayer?.clearMediaItems()
@@ -158,6 +200,10 @@ class TvPlayerManager private constructor(private val context: Context) {
 
     fun isPlaying(): Boolean {
         return exoPlayer?.isPlaying ?: false
+    }
+
+    fun isEnded(): Boolean {
+        return currentState == PlayerState.ENDED || exoPlayer?.playbackState == Player.STATE_ENDED
     }
 
     fun isReady(): Boolean {

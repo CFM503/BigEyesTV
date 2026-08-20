@@ -2,6 +2,7 @@ package com.bigeyes.tv.dlna
 
 import android.content.Context
 import android.util.Log
+import com.bigeyes.tv.player.PlayerState
 import com.bigeyes.tv.player.TvPlayerManager
 import com.bigeyes.tv.utils.DeviceIdManager
 import com.bigeyes.tv.utils.NetworkUtils
@@ -103,10 +104,13 @@ class DlnaActionHandler(
     <specVersion><major>1</major><minor>0</minor></specVersion>
     <actionList>
         <action><name>SetAVTransportURI</name></action>
+        <action><name>SetNextAVTransportURI</name></action>
         <action><name>Play</name></action>
         <action><name>Pause</name></action>
         <action><name>Seek</name></action>
         <action><name>Stop</name></action>
+        <action><name>Next</name></action>
+        <action><name>Previous</name></action>
         <action><name>GetPositionInfo</name></action>
         <action><name>GetTransportInfo</name></action>
     </actionList>
@@ -155,6 +159,14 @@ class DlnaActionHandler(
                 }
                 buildSoapResponse("SetAVTransportURIResponse", "urn:schemas-upnp-org:service:AVTransport:1", "")
             }
+            soapAction.contains("SetNextAVTransportURI") || body.contains("SetNextAVTransportURI") -> {
+                val uriRegex = Regex("<NextURI>(.*?)</NextURI>", RegexOption.DOT_MATCHES_ALL)
+                val match = uriRegex.find(body)
+                val nextStreamUrl = match?.groupValues?.get(1)?.trim()?.replace("&amp;", "&") ?: ""
+                Log.i(TAG, "DLNA SetNextAVTransportURI extracted URL: $nextStreamUrl")
+                playerManager.setNextUrl(if (nextStreamUrl.isNotBlank()) nextStreamUrl else null)
+                buildSoapResponse("SetNextAVTransportURIResponse", "urn:schemas-upnp-org:service:AVTransport:1", "")
+            }
             soapAction.contains("Play") || body.contains("<u:Play") || body.contains("<Play") -> {
                 playerManager.resume()
                 buildSoapResponse("PlayResponse", "urn:schemas-upnp-org:service:AVTransport:1", "")
@@ -175,9 +187,19 @@ class DlnaActionHandler(
                 playerManager.stop()
                 buildSoapResponse("StopResponse", "urn:schemas-upnp-org:service:AVTransport:1", "")
             }
+            soapAction.contains("Next") || body.contains("<u:Next") || body.contains("<Next") -> {
+                Log.i(TAG, "DLNA Next action received")
+                playerManager.playNext()
+                buildSoapResponse("NextResponse", "urn:schemas-upnp-org:service:AVTransport:1", "")
+            }
+            soapAction.contains("Previous") || body.contains("<u:Previous") || body.contains("<Previous") -> {
+                Log.i(TAG, "DLNA Previous action received")
+                playerManager.seekTo(0L)
+                buildSoapResponse("PreviousResponse", "urn:schemas-upnp-org:service:AVTransport:1", "")
+            }
             soapAction.contains("GetPositionInfo") || body.contains("GetPositionInfo") -> {
                 val durationSec = playerManager.getDurationMs() / 1000
-                val posSec = playerManager.getCurrentPositionMs() / 1000
+                val posSec = if (playerManager.isEnded() && durationSec > 0) durationSec else playerManager.getCurrentPositionMs() / 1000
                 val durFormatted = formatSecondsToTimeString(durationSec)
                 val posFormatted = formatSecondsToTimeString(posSec)
                 val url = playerManager.currentUrl ?: ""
@@ -195,7 +217,13 @@ class DlnaActionHandler(
                 buildSoapResponse("GetPositionInfoResponse", "urn:schemas-upnp-org:service:AVTransport:1", innerXml)
             }
             soapAction.contains("GetTransportInfo") || body.contains("GetTransportInfo") -> {
-                val state = if (playerManager.isPlaying()) "PLAYING" else if (playerManager.currentUrl != null) "PAUSED_PLAYBACK" else "STOPPED"
+                val state = when {
+                    playerManager.isPlaying() -> "PLAYING"
+                    playerManager.isEnded() -> "STOPPED"
+                    playerManager.currentState == PlayerState.BUFFERING -> "TRANSITIONING"
+                    playerManager.currentUrl != null -> "PAUSED_PLAYBACK"
+                    else -> "STOPPED"
+                }
                 val innerXml = """
                     <CurrentTransportState>$state</CurrentTransportState>
                     <CurrentTransportStatus>OK</CurrentTransportStatus>

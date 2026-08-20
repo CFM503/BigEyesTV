@@ -2,13 +2,17 @@ package com.bigeyes.tv.ui
 
 import android.app.ProgressDialog
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
+import android.widget.Button
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.media3.ui.AspectRatioFrameLayout
 import com.bigeyes.tv.databinding.ActivityMainBinding
 import com.bigeyes.tv.player.PlayerState
 import com.bigeyes.tv.player.TvPlayerListener
@@ -19,6 +23,9 @@ import com.bigeyes.tv.update.UpdateManager
 import com.bigeyes.tv.utils.DeviceIdManager
 import com.bigeyes.tv.utils.NetworkUtils
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : AppCompatActivity(), TvPlayerListener {
 
@@ -29,6 +36,24 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
 
     private var updateDialog: AlertDialog? = null
     private var downloadProgressDialog: ProgressDialog? = null
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var hideOverlayRunnable: Runnable? = null
+    private var progressUpdateRunnable: Runnable? = null
+
+    // Speed options: 1.0x, 1.25x, 1.5x, 2.0x, 0.75x
+    private val speedOptions = floatArrayOf(1.0f, 1.25f, 1.5f, 2.0f, 0.75f)
+    private var currentSpeedIndex = 0
+
+    // Aspect ratio modes: FIT (0), FILL (3), ZOOM (4), FIXED_WIDTH (1)
+    private val aspectRatios = intArrayOf(
+        AspectRatioFrameLayout.RESIZE_MODE_FIT,
+        AspectRatioFrameLayout.RESIZE_MODE_FILL,
+        AspectRatioFrameLayout.RESIZE_MODE_ZOOM,
+        AspectRatioFrameLayout.RESIZE_MODE_FIXED_WIDTH
+    )
+    private val aspectRatioNames = arrayOf("比例: 适应", "比例: 铺满", "比例: 裁剪", "比例: 16:9")
+    private var currentAspectRatioIndex = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -42,6 +67,7 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
         updateManager = UpdateManager(this)
 
         updateDeviceInfo()
+        setupOverlayControls()
 
         playerManager.addListener(this)
         playerManager.attachPlayerView(binding.playerView)
@@ -138,6 +164,165 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
         })
     }
 
+    private fun setupOverlayControls() {
+        binding.btnOverlayPlayPause.setOnClickListener {
+            playerManager.togglePlayPause()
+            updateOverlayPlayPauseButton()
+            resetOverlayHideTimer()
+        }
+
+        binding.btnOverlayRewind.setOnClickListener {
+            val current = playerManager.getCurrentPositionMs()
+            val target = (current - 15000L).coerceAtLeast(0L)
+            playerManager.seekTo(target)
+            updateOverlayProgress()
+            resetOverlayHideTimer()
+        }
+
+        binding.btnOverlayForward.setOnClickListener {
+            val current = playerManager.getCurrentPositionMs()
+            val duration = playerManager.getDurationMs()
+            val target = if (duration > 0) (current + 15000L).coerceAtMost(duration) else (current + 15000L)
+            playerManager.seekTo(target)
+            updateOverlayProgress()
+            resetOverlayHideTimer()
+        }
+
+        binding.btnOverlayNextEpisode.setOnClickListener {
+            val played = playerManager.playNext()
+            if (played) {
+                Toast.makeText(this, "正在为您播放下一集...", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "暂无下一集预加载地址，可在手机端点击下一集", Toast.LENGTH_SHORT).show()
+            }
+            resetOverlayHideTimer()
+        }
+
+        binding.btnOverlaySpeed.setOnClickListener {
+            currentSpeedIndex = (currentSpeedIndex + 1) % speedOptions.size
+            val newSpeed = speedOptions[currentSpeedIndex]
+            playerManager.setPlaybackSpeed(newSpeed)
+            binding.btnOverlaySpeed.text = "倍速 ${newSpeed}x"
+            Toast.makeText(this, "已切换为 ${newSpeed}x 倍速", Toast.LENGTH_SHORT).show()
+            resetOverlayHideTimer()
+        }
+
+        binding.btnOverlayAspectRatio.setOnClickListener {
+            currentAspectRatioIndex = (currentAspectRatioIndex + 1) % aspectRatios.size
+            val newMode = aspectRatios[currentAspectRatioIndex]
+            val modeName = aspectRatioNames[currentAspectRatioIndex]
+            binding.playerView.resizeMode = newMode
+            binding.btnOverlayAspectRatio.text = modeName
+            Toast.makeText(this, "画面$modeName", Toast.LENGTH_SHORT).show()
+            resetOverlayHideTimer()
+        }
+
+        binding.btnOverlayExit.setOnClickListener {
+            hideOverlay()
+            playerManager.stop()
+        }
+    }
+
+    private fun showOverlay() {
+        if (binding.playerView.visibility != View.VISIBLE) return
+        binding.playbackOverlay.visibility = View.VISIBLE
+        updateOverlayPlayPauseButton()
+        updateOverlayHeader()
+        updateOverlayProgress()
+
+        // Default focus on Play/Pause button
+        binding.btnOverlayPlayPause.requestFocus()
+
+        startProgressUpdates()
+        resetOverlayHideTimer()
+    }
+
+    private fun hideOverlay() {
+        binding.playbackOverlay.visibility = View.GONE
+        stopProgressUpdates()
+        hideOverlayRunnable?.let { mainHandler.removeCallbacks(it) }
+    }
+
+    private fun isOverlayVisible(): Boolean {
+        return binding.playbackOverlay.visibility == View.VISIBLE
+    }
+
+    private fun resetOverlayHideTimer() {
+        hideOverlayRunnable?.let { mainHandler.removeCallbacks(it) }
+        val r = Runnable {
+            if (isOverlayVisible()) {
+                hideOverlay()
+            }
+        }
+        hideOverlayRunnable = r
+        mainHandler.postDelayed(r, 5000L)
+    }
+
+    private fun startProgressUpdates() {
+        stopProgressUpdates()
+        val r = object : Runnable {
+            override fun run() {
+                if (isOverlayVisible()) {
+                    updateOverlayProgress()
+                    updateOverlayClock()
+                    mainHandler.postDelayed(this, 500L)
+                }
+            }
+        }
+        progressUpdateRunnable = r
+        mainHandler.post(r)
+    }
+
+    private fun stopProgressUpdates() {
+        progressUpdateRunnable?.let { mainHandler.removeCallbacks(it) }
+        progressUpdateRunnable = null
+    }
+
+    private fun updateOverlayPlayPauseButton() {
+        val isPlaying = playerManager.isPlaying()
+        binding.btnOverlayPlayPause.text = if (isPlaying) "暂停" else "播放"
+    }
+
+    private fun updateOverlayHeader() {
+        val url = playerManager.currentUrl
+        binding.tvOverlayTitle.text = if (!url.isNullOrBlank()) "正在投屏播放" else "大屏播放器"
+        updateOverlayClock()
+    }
+
+    private fun updateOverlayClock() {
+        val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
+        binding.tvOverlayClock.text = sdf.format(Date())
+    }
+
+    private fun updateOverlayProgress() {
+        val currentMs = playerManager.getCurrentPositionMs()
+        val durationMs = playerManager.getDurationMs()
+
+        val curSec = currentMs / 1000
+        val durSec = durationMs / 1000
+
+        binding.tvOverlayCurrentTime.text = formatSecondsToTime(curSec)
+        binding.tvOverlayTotalTime.text = formatSecondsToTime(durSec)
+
+        if (durSec > 0) {
+            val progress = ((curSec.toFloat() / durSec.toFloat()) * 1000).toInt()
+            binding.overlayProgressBar.progress = progress.coerceIn(0, 1000)
+        } else {
+            binding.overlayProgressBar.progress = 0
+        }
+    }
+
+    private fun formatSecondsToTime(totalSeconds: Long): String {
+        val hours = totalSeconds / 3600
+        val minutes = (totalSeconds % 3600) / 60
+        val seconds = totalSeconds % 60
+        return if (hours > 0) {
+            String.format(Locale.getDefault(), "%02d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         updateDeviceInfo()
@@ -146,6 +331,7 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
     }
 
     override fun onDestroy() {
+        hideOverlay()
         updateDialog?.dismiss()
         downloadProgressDialog?.dismiss()
         playerManager.removeListener(this)
@@ -154,46 +340,83 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
     }
 
     /**
-     * D-pad and TV Remote key event handling
+     * D-pad and TV Remote key event handling (Scheme A)
      */
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         // If player is currently active/visible
         if (binding.playerView.visibility == View.VISIBLE) {
-            when (keyCode) {
-                KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
-                    Log.i(TAG, "Remote BACK pressed during playback -> Stopping playback")
-                    playerManager.stop()
-                    return true
+            if (!isOverlayVisible()) {
+                // When overlay is hidden, any D-pad key, OK, or MENU brings up the control overlay
+                when (keyCode) {
+                    KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
+                        Log.i(TAG, "Remote BACK pressed while overlay hidden -> Stopping playback")
+                        playerManager.stop()
+                        return true
+                    }
+                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
+                    KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_UP,
+                    KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
+                    KeyEvent.KEYCODE_MENU -> {
+                        Log.i(TAG, "Remote key $keyCode pressed -> Showing control overlay")
+                        showOverlay()
+                        return true
+                    }
+                    KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                        playerManager.togglePlayPause()
+                        showOverlay()
+                        return true
+                    }
+                    KeyEvent.KEYCODE_MEDIA_PLAY -> {
+                        playerManager.resume()
+                        showOverlay()
+                        return true
+                    }
+                    KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                        playerManager.pause()
+                        showOverlay()
+                        return true
+                    }
+                    KeyEvent.KEYCODE_MEDIA_STOP -> {
+                        playerManager.stop()
+                        return true
+                    }
+                    KeyEvent.KEYCODE_MEDIA_REWIND -> {
+                        val current = playerManager.getCurrentPositionMs()
+                        val target = (current - 15000L).coerceAtLeast(0L)
+                        playerManager.seekTo(target)
+                        showOverlay()
+                        return true
+                    }
+                    KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
+                        val current = playerManager.getCurrentPositionMs()
+                        val duration = playerManager.getDurationMs()
+                        val target = if (duration > 0) (current + 15000L).coerceAtMost(duration) else (current + 15000L)
+                        playerManager.seekTo(target)
+                        showOverlay()
+                        return true
+                    }
                 }
-                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
-                    playerManager.togglePlayPause()
-                    return true
+            } else {
+                // When overlay is visible, reset the 5s auto-hide timer on any user interaction
+                resetOverlayHideTimer()
+
+                when (keyCode) {
+                    KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
+                        Log.i(TAG, "Remote BACK pressed while overlay visible -> Hiding overlay only")
+                        hideOverlay()
+                        return true
+                    }
+                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                        val focused = currentFocus
+                        if (focused != null && focused is Button) {
+                            Log.i(TAG, "Remote OK clicked on focused button: ${focused.text}")
+                            focused.performClick()
+                            return true
+                        }
+                    }
                 }
-                KeyEvent.KEYCODE_MEDIA_PLAY -> {
-                    playerManager.resume()
-                    return true
-                }
-                KeyEvent.KEYCODE_MEDIA_PAUSE -> {
-                    playerManager.pause()
-                    return true
-                }
-                KeyEvent.KEYCODE_MEDIA_STOP -> {
-                    playerManager.stop()
-                    return true
-                }
-                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_MEDIA_REWIND -> {
-                    val current = playerManager.getCurrentPositionMs()
-                    val target = (current - 10000L).coerceAtLeast(0L)
-                    playerManager.seekTo(target)
-                    return true
-                }
-                KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
-                    val current = playerManager.getCurrentPositionMs()
-                    val duration = playerManager.getDurationMs()
-                    val target = if (duration > 0) (current + 10000L).coerceAtMost(duration) else (current + 10000L)
-                    playerManager.seekTo(target)
-                    return true
-                }
+                // Let DPAD_LEFT, DPAD_RIGHT, DPAD_UP, DPAD_DOWN move focus normally across buttons
+                return super.onKeyDown(keyCode, event)
             }
         }
 
@@ -207,9 +430,11 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
                     showPlayer()
                 }
                 PlayerState.IDLE, PlayerState.ENDED -> {
+                    hideOverlay()
                     showStandby()
                 }
                 PlayerState.ERROR -> {
+                    hideOverlay()
                     showStandby()
                 }
             }
@@ -226,6 +451,7 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
     override fun onPlaybackStopped() {
         runOnUiThread {
             Log.i(TAG, "Playback stopped")
+            hideOverlay()
             showStandby()
         }
     }
@@ -233,6 +459,7 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
     override fun onError(error: String) {
         runOnUiThread {
             Log.e(TAG, "Playback error: $error")
+            hideOverlay()
             showStandby()
         }
     }

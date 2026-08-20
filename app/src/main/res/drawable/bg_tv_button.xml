@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Focused state: High-contrast TV highlight with border -->
+    <item android:state_focused="true">
+        <shape android:shape="rectangle">
+            <solid android:color="#332196F3" />
+            <stroke android:width="2.5dp" android:color="#2196F3" />
+            <corners android:radius="8dp" />
+        </shape>
+    </item>
+    <!-- Pressed state -->
+    <item android:state_pressed="true">
+        <shape android:shape="rectangle">
+            <solid android:color="#662196F3" />
+            <stroke android:width="2.5dp" android:color="#64B5F6" />
+            <corners android:radius="8dp" />
+        </shape>
+    </item>
+    <!-- Default state: Semi-transparent dark background -->
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#801E1E1E" />
+            <stroke android:width="1dp" android:color="#40FFFFFF" />
+            <corners android:radius="8dp" />
+        </shape>
+    </item>
+</selector>

@@ -12,7 +12,211 @@
         android:layout_height="match_parent"
         android:visibility="gone"
         app:show_buffering="when_playing"
-        app:use_controller="true" />
+        app:use_controller="false" />
+
+    <!-- Remote Control Playback Overlay (Scheme A: shown on OK click) -->
+    <RelativeLayout
+        android:id="@+id/playbackOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/bg_control_overlay"
+        android:paddingStart="40dp"
+        android:paddingEnd="40dp"
+        android:paddingTop="28dp"
+        android:paddingBottom="28dp"
+        android:visibility="gone">
+
+        <!-- Top Header Info -->
+        <LinearLayout
+            android:id="@+id/overlayHeader"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_alignParentTop="true"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:id="@+id/tvOverlayTitle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="正在投屏播放"
+                android:textColor="@color/white"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:singleLine="true"
+                android:ellipsize="end" />
+
+            <TextView
+                android:id="@+id/tvOverlayClock"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="12:00"
+                android:textColor="@color/text_secondary"
+                android:textSize="18sp"
+                android:layout_marginStart="16dp" />
+        </LinearLayout>
+
+        <!-- Bottom Controls Container -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_alignParentBottom="true"
+            android:orientation="vertical">
+
+            <!-- Progress Bar and Times -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="16dp">
+
+                <TextView
+                    android:id="@+id/tvOverlayCurrentTime"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="00:00:00"
+                    android:textColor="@color/white"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <ProgressBar
+                    android:id="@+id/overlayProgressBar"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="0dp"
+                    android:layout_height="8dp"
+                    android:layout_weight="1"
+                    android:layout_marginStart="16dp"
+                    android:layout_marginEnd="16dp"
+                    android:max="1000"
+                    android:progress="0"
+                    android:progressTint="@color/accent_blue"
+                    android:progressBackgroundTint="#40FFFFFF" />
+
+                <TextView
+                    android:id="@+id/tvOverlayTotalTime"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="00:00:00"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="16sp" />
+            </LinearLayout>
+
+            <!-- Action Buttons Toolbar (Focusable for Android TV Remote) -->
+            <LinearLayout
+                android:id="@+id/overlayButtonBar"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <Button
+                    android:id="@+id/btnOverlayPlayPause"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:background="@drawable/bg_tv_button"
+                    android:text="暂停"
+                    android:textColor="@color/white"
+                    android:textSize="15sp"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:paddingStart="20dp"
+                    android:paddingEnd="20dp" />
+
+                <Button
+                    android:id="@+id/btnOverlayRewind"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:layout_marginStart="12dp"
+                    android:background="@drawable/bg_tv_button"
+                    android:text="快退 15s"
+                    android:textColor="@color/white"
+                    android:textSize="15sp"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp" />
+
+                <Button
+                    android:id="@+id/btnOverlayForward"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:layout_marginStart="12dp"
+                    android:background="@drawable/bg_tv_button"
+                    android:text="快进 15s"
+                    android:textColor="@color/white"
+                    android:textSize="15sp"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp" />
+
+                <Button
+                    android:id="@+id/btnOverlayNextEpisode"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:layout_marginStart="12dp"
+                    android:background="@drawable/bg_tv_button"
+                    android:text="下一集"
+                    android:textColor="@color/white"
+                    android:textSize="15sp"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp" />
+
+                <Button
+                    android:id="@+id/btnOverlaySpeed"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:layout_marginStart="12dp"
+                    android:background="@drawable/bg_tv_button"
+                    android:text="倍速 1.0x"
+                    android:textColor="@color/white"
+                    android:textSize="15sp"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp" />
+
+                <Button
+                    android:id="@+id/btnOverlayAspectRatio"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:layout_marginStart="12dp"
+                    android:background="@drawable/bg_tv_button"
+                    android:text="比例: 适应"
+                    android:textColor="@color/white"
+                    android:textSize="15sp"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp" />
+
+                <View
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="1" />
+
+                <Button
+                    android:id="@+id/btnOverlayExit"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:background="@drawable/bg_tv_button"
+                    android:text="退出播放"
+                    android:textColor="#FF5252"
+                    android:textSize="15sp"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:paddingStart="20dp"
+                    android:paddingEnd="20dp" />
+
+            </LinearLayout>
+
+        </LinearLayout>
+
+    </RelativeLayout>
 
     <!-- Standby Dashboard Overlay (Shown when idle) -->
     <LinearLayout
