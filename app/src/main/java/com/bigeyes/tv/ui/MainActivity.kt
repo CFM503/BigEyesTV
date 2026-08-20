@@ -36,6 +36,7 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
 
     private var updateDialog: AlertDialog? = null
     private var downloadProgressDialog: ProgressDialog? = null
+    private var exitConfirmDialog: AlertDialog? = null
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var hideOverlayRunnable: Runnable? = null
@@ -345,6 +346,35 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
         Log.i(TAG, "Holding speed deactivated -> Restored to ${normalSpeed}x")
     }
 
+    private fun showExitPlaybackConfirmDialog() {
+        if (exitConfirmDialog?.isShowing == true) return
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("退出投屏播放")
+            .setMessage("确定要结束当前视频播放并返回主页吗？")
+            .setCancelable(true)
+            .setPositiveButton("确认退出") { _, _ ->
+                playerManager.stop()
+            }
+            .setNegativeButton("继续播放") { dialogInterface, _ ->
+                dialogInterface.dismiss()
+            }
+            .setOnDismissListener {
+                exitConfirmDialog = null
+            }
+            .create()
+
+        exitConfirmDialog = dialog
+        dialog.show()
+
+        // Focus "确认退出" for TV remote control
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.apply {
+            isFocusable = true
+            isFocusableInTouchMode = true
+            requestFocus()
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         updateDeviceInfo()
@@ -353,6 +383,8 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
     }
 
     override fun onDestroy() {
+        exitConfirmDialog?.dismiss()
+        exitConfirmDialog = null
         deactivateHoldingSpeed()
         pendingSpeedHoldRunnable?.let { mainHandler.removeCallbacks(it) }
         pendingSpeedHoldRunnable = null
@@ -369,8 +401,15 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
      * - Holding Right: 3.0x speed, release to restore 1.0x normal
      * - Holding Left: 0.5x speed, release to restore 1.0x normal
      * - Short tap OK / D-pad: Show control overlay (Scheme A)
+     * - Back key while overlay visible: Hide overlay only (keep playing)
+     * - Back key while overlay hidden: Show confirmation dialog to exit (Situation B)
      */
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        // If exit confirm dialog is currently showing, let it handle keys
+        if (exitConfirmDialog?.isShowing == true) {
+            return super.onKeyDown(keyCode, event)
+        }
+
         // If player is currently active/visible
         if (binding.playerView.visibility == View.VISIBLE) {
             // Handle long-press holding on Right (3.0x speed) and Left (0.5x speed)
@@ -410,8 +449,8 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
                 // When overlay is hidden, any D-pad key, OK, or MENU brings up the control overlay
                 when (keyCode) {
                     KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
-                        Log.i(TAG, "Remote BACK pressed while overlay hidden -> Stopping playback")
-                        playerManager.stop()
+                        Log.i(TAG, "Remote BACK pressed while overlay hidden -> Showing exit confirm dialog")
+                        showExitPlaybackConfirmDialog()
                         return true
                     }
                     KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
@@ -557,6 +596,8 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
     }
 
     private fun showStandby() {
+        exitConfirmDialog?.dismiss()
+        exitConfirmDialog = null
         deactivateHoldingSpeed()
         pendingSpeedHoldRunnable?.let { mainHandler.removeCallbacks(it) }
         pendingSpeedHoldRunnable = null
