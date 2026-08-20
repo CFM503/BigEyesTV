@@ -41,6 +41,10 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
     private var hideOverlayRunnable: Runnable? = null
     private var progressUpdateRunnable: Runnable? = null
 
+    // Holding speed (Long-press Left 0.5x / Right 3.0x)
+    private var isHoldingSpeed = false
+    private var pendingSpeedHoldRunnable: Runnable? = null
+
     // Speed options: 1.0x, 1.25x, 1.5x, 2.0x, 0.75x
     private val speedOptions = floatArrayOf(1.0f, 1.25f, 1.5f, 2.0f, 0.75f)
     private var currentSpeedIndex = 0
@@ -323,6 +327,24 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
         }
     }
 
+    private fun activateHoldingSpeed(speed: Float, hudText: String) {
+        if (binding.playerView.visibility != View.VISIBLE) return
+        isHoldingSpeed = true
+        playerManager.setPlaybackSpeed(speed)
+        binding.tvSpeedHudText.text = hudText
+        binding.speedHudLayout.visibility = View.VISIBLE
+        Log.i(TAG, "Holding speed activated: $speed ($hudText)")
+    }
+
+    private fun deactivateHoldingSpeed() {
+        if (!isHoldingSpeed) return
+        isHoldingSpeed = false
+        val normalSpeed = speedOptions[currentSpeedIndex]
+        playerManager.setPlaybackSpeed(normalSpeed)
+        binding.speedHudLayout.visibility = View.GONE
+        Log.i(TAG, "Holding speed deactivated -> Restored to ${normalSpeed}x")
+    }
+
     override fun onResume() {
         super.onResume()
         updateDeviceInfo()
@@ -331,6 +353,9 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
     }
 
     override fun onDestroy() {
+        deactivateHoldingSpeed()
+        pendingSpeedHoldRunnable?.let { mainHandler.removeCallbacks(it) }
+        pendingSpeedHoldRunnable = null
         hideOverlay()
         updateDialog?.dismiss()
         downloadProgressDialog?.dismiss()
@@ -340,11 +365,47 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
     }
 
     /**
-     * D-pad and TV Remote key event handling (Scheme A)
+     * D-pad and TV Remote key event handling
+     * - Holding Right: 3.0x speed, release to restore 1.0x normal
+     * - Holding Left: 0.5x speed, release to restore 1.0x normal
+     * - Short tap OK / D-pad: Show control overlay (Scheme A)
      */
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         // If player is currently active/visible
         if (binding.playerView.visibility == View.VISIBLE) {
+            // Handle long-press holding on Right (3.0x speed) and Left (0.5x speed)
+            if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                if (event?.repeatCount == 0) {
+                    if (pendingSpeedHoldRunnable == null && !isHoldingSpeed) {
+                        val r = Runnable { activateHoldingSpeed(3.0f, "⏩ 3.0X 快进中") }
+                        pendingSpeedHoldRunnable = r
+                        mainHandler.postDelayed(r, 280L)
+                    }
+                } else if (event != null && event.repeatCount >= 1) {
+                    if (!isHoldingSpeed) {
+                        pendingSpeedHoldRunnable?.let { mainHandler.removeCallbacks(it) }
+                        pendingSpeedHoldRunnable = null
+                        activateHoldingSpeed(3.0f, "⏩ 3.0X 快进中")
+                    }
+                    return true
+                }
+            } else if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                if (event?.repeatCount == 0) {
+                    if (pendingSpeedHoldRunnable == null && !isHoldingSpeed) {
+                        val r = Runnable { activateHoldingSpeed(0.5f, "⏪ 0.5X 慢放中") }
+                        pendingSpeedHoldRunnable = r
+                        mainHandler.postDelayed(r, 280L)
+                    }
+                } else if (event != null && event.repeatCount >= 1) {
+                    if (!isHoldingSpeed) {
+                        pendingSpeedHoldRunnable?.let { mainHandler.removeCallbacks(it) }
+                        pendingSpeedHoldRunnable = null
+                        activateHoldingSpeed(0.5f, "⏪ 0.5X 慢放中")
+                    }
+                    return true
+                }
+            }
+
             if (!isOverlayVisible()) {
                 // When overlay is hidden, any D-pad key, OK, or MENU brings up the control overlay
                 when (keyCode) {
@@ -355,10 +416,13 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
                     }
                     KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
                     KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_UP,
-                    KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
                     KeyEvent.KEYCODE_MENU -> {
                         Log.i(TAG, "Remote key $keyCode pressed -> Showing control overlay")
                         showOverlay()
+                        return true
+                    }
+                    KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        // Captured for holding speed; short tap will show overlay in onKeyUp if not held
                         return true
                     }
                     KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
@@ -423,6 +487,25 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
         return super.onKeyDown(keyCode, event)
     }
 
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        if (binding.playerView.visibility == View.VISIBLE) {
+            if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT || keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                pendingSpeedHoldRunnable?.let { mainHandler.removeCallbacks(it) }
+                pendingSpeedHoldRunnable = null
+
+                if (isHoldingSpeed) {
+                    deactivateHoldingSpeed()
+                    return true
+                } else if (!isOverlayVisible()) {
+                    // Short tap on left/right when overlay is hidden -> show overlay
+                    showOverlay()
+                    return true
+                }
+            }
+        }
+        return super.onKeyUp(keyCode, event)
+    }
+
     override fun onStateChanged(state: PlayerState) {
         runOnUiThread {
             when (state) {
@@ -430,10 +513,12 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
                     showPlayer()
                 }
                 PlayerState.IDLE, PlayerState.ENDED -> {
+                    deactivateHoldingSpeed()
                     hideOverlay()
                     showStandby()
                 }
                 PlayerState.ERROR -> {
+                    deactivateHoldingSpeed()
                     hideOverlay()
                     showStandby()
                 }
@@ -451,6 +536,7 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
     override fun onPlaybackStopped() {
         runOnUiThread {
             Log.i(TAG, "Playback stopped")
+            deactivateHoldingSpeed()
             hideOverlay()
             showStandby()
         }
@@ -459,6 +545,7 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
     override fun onError(error: String) {
         runOnUiThread {
             Log.e(TAG, "Playback error: $error")
+            deactivateHoldingSpeed()
             hideOverlay()
             showStandby()
         }
@@ -470,6 +557,9 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
     }
 
     private fun showStandby() {
+        deactivateHoldingSpeed()
+        pendingSpeedHoldRunnable?.let { mainHandler.removeCallbacks(it) }
+        pendingSpeedHoldRunnable = null
         binding.playerView.visibility = View.GONE
         binding.standbyLayout.visibility = View.VISIBLE
         updateDeviceInfo()
