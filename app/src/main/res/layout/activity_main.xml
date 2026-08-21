@@ -64,6 +64,43 @@
             android:layout_alignParentBottom="true"
             android:orientation="vertical">
 
+            <!-- Scrubbing Floating Time Preview Bubble (Displays target movie time while sliding) -->
+            <LinearLayout
+                android:id="@+id/layoutScrubPreview"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center_horizontal"
+                android:layout_marginBottom="8dp"
+                android:background="@drawable/bg_tv_button"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp"
+                android:gravity="center"
+                android:orientation="horizontal"
+                android:elevation="12dp"
+                android:visibility="invisible">
+
+                <TextView
+                    android:id="@+id/tvScrubPreviewTime"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="00:00:00"
+                    android:textColor="#FFD700"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvScrubDeltaTime"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:text="(+00:00)"
+                    android:textColor="@color/accent_blue"
+                    android:textSize="15sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
             <!-- Progress Bar and Times (Focusable for Android TV Remote) -->
             <LinearLayout
                 android:id="@+id/layoutProgressContainer"

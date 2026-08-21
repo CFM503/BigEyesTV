@@ -15,6 +15,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.media3.ui.AspectRatioFrameLayout
+import com.bigeyes.tv.config.TvPlayerConfig
 import com.bigeyes.tv.databinding.ActivityMainBinding
 import com.bigeyes.tv.player.PlayerState
 import com.bigeyes.tv.player.TvPlayerListener
@@ -48,18 +49,14 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
     private var isHoldingSpeed = false
     private var pendingSpeedHoldRunnable: Runnable? = null
 
-    // Speed options: 1.0x, 1.25x, 1.5x, 2.0x, 0.75x
-    private val speedOptions = floatArrayOf(1.0f, 1.25f, 1.5f, 2.0f, 0.75f)
-    private var currentSpeedIndex = 0
+    // Scrubbing (Seekbar sliding like a mouse with real-time time preview)
+    private var isScrubbing = false
+    private var scrubOriginMs = 0L
+    private var scrubTargetMs = 0L
+    private var scrubHoldStartTime = 0L
+    private var commitScrubRunnable: Runnable? = null
 
-    // Aspect ratio modes: FIT (0), FILL (3), ZOOM (4), FIXED_WIDTH (1)
-    private val aspectRatios = intArrayOf(
-        AspectRatioFrameLayout.RESIZE_MODE_FIT,
-        AspectRatioFrameLayout.RESIZE_MODE_FILL,
-        AspectRatioFrameLayout.RESIZE_MODE_ZOOM,
-        AspectRatioFrameLayout.RESIZE_MODE_FIXED_WIDTH
-    )
-    private val aspectRatioNames = arrayOf("比例: 适应", "比例: 铺满", "比例: 裁剪", "比例: 16:9")
+    private var currentSpeedIndex = 0
     private var currentAspectRatioIndex = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -180,6 +177,9 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
                 binding.tvOverlayCurrentTime.textSize = 18f
                 resetOverlayHideTimer()
             } else {
+                if (isScrubbing) {
+                    commitScrub()
+                }
                 binding.tvOverlayCurrentTime.setTextColor(Color.WHITE)
                 binding.tvOverlayCurrentTime.textSize = 16f
             }
@@ -218,7 +218,7 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
 
         binding.btnOverlayRewind.setOnClickListener {
             val current = playerManager.getCurrentPositionMs()
-            val target = (current - 15000L).coerceAtLeast(0L)
+            val target = (current - TvPlayerConfig.QuickSeek.REWIND_STEP_MS).coerceAtLeast(0L)
             playerManager.seekTo(target)
             updateOverlayProgress(target)
             resetOverlayHideTimer()
@@ -227,7 +227,8 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
         binding.btnOverlayForward.setOnClickListener {
             val current = playerManager.getCurrentPositionMs()
             val duration = playerManager.getDurationMs()
-            val target = if (duration > 0) (current + 15000L).coerceAtMost(duration) else (current + 15000L)
+            val step = TvPlayerConfig.QuickSeek.FORWARD_STEP_MS
+            val target = if (duration > 0) (current + step).coerceAtMost(duration) else (current + step)
             playerManager.seekTo(target)
             updateOverlayProgress(target)
             resetOverlayHideTimer()
@@ -244,6 +245,7 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
         }
 
         binding.btnOverlaySpeed.setOnClickListener {
+            val speedOptions = TvPlayerConfig.PlaybackOptions.SPEED_OPTIONS
             currentSpeedIndex = (currentSpeedIndex + 1) % speedOptions.size
             val newSpeed = speedOptions[currentSpeedIndex]
             playerManager.setPlaybackSpeed(newSpeed)
@@ -253,6 +255,8 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
         }
 
         binding.btnOverlayAspectRatio.setOnClickListener {
+            val aspectRatios = TvPlayerConfig.PlaybackOptions.ASPECT_RATIOS
+            val aspectRatioNames = TvPlayerConfig.PlaybackOptions.ASPECT_RATIO_NAMES
             currentAspectRatioIndex = (currentAspectRatioIndex + 1) % aspectRatios.size
             val newMode = aspectRatios[currentAspectRatioIndex]
             val modeName = aspectRatioNames[currentAspectRatioIndex]
@@ -266,6 +270,106 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
             hideOverlay()
             playerManager.stop()
         }
+    }
+
+    /**
+     * Start or update sliding on SeekBar like a mouse, displaying real-time time preview
+     */
+    private fun startOrUpdateScrub(isForward: Boolean, repeatCount: Int) {
+        val durationMs = playerManager.getDurationMs()
+        if (durationMs <= 0) return
+
+        // Cancel any pending debounce commit
+        commitScrubRunnable?.let { mainHandler.removeCallbacks(it) }
+        commitScrubRunnable = null
+
+        val now = System.currentTimeMillis()
+        if (!isScrubbing) {
+            isScrubbing = true
+            scrubOriginMs = playerManager.getCurrentPositionMs()
+            scrubTargetMs = scrubOriginMs
+            scrubHoldStartTime = now
+        }
+
+        // Stepped acceleration algorithm based on hold time
+        val holdDuration = now - scrubHoldStartTime
+        val stepMs: Long = when {
+            repeatCount == 0 || holdDuration < TvPlayerConfig.Scrubbing.STAGE_1_MAX_HOLD_MS -> TvPlayerConfig.Scrubbing.STAGE_1_STEP_MS
+            holdDuration < TvPlayerConfig.Scrubbing.STAGE_2_MAX_HOLD_MS -> TvPlayerConfig.Scrubbing.STAGE_2_STEP_MS
+            holdDuration < TvPlayerConfig.Scrubbing.STAGE_3_MAX_HOLD_MS -> TvPlayerConfig.Scrubbing.STAGE_3_STEP_MS
+            else -> TvPlayerConfig.Scrubbing.STAGE_4_STEP_MS
+        }
+
+        scrubTargetMs = if (isForward) {
+            (scrubTargetMs + stepMs).coerceAtMost(durationMs)
+        } else {
+            (scrubTargetMs - stepMs).coerceAtLeast(0L)
+        }
+
+        // Update SeekBar position visually (like dragging with a mouse)
+        val progress = ((scrubTargetMs.toFloat() / durationMs.toFloat()) * 1000).toInt()
+        binding.overlaySeekBar.progress = progress.coerceIn(0, 1000)
+
+        // Update current time label
+        binding.tvOverlayCurrentTime.text = formatSecondsToTime(scrubTargetMs / 1000)
+
+        // Update floating preview bubble
+        binding.tvScrubPreviewTime.text = formatSecondsToTime(scrubTargetMs / 1000)
+        val deltaSec = (scrubTargetMs - scrubOriginMs) / 1000
+        val sign = if (deltaSec >= 0) "+" else "-"
+        binding.tvScrubDeltaTime.text = "($sign${formatSecondsToTime(Math.abs(deltaSec))})"
+        binding.layoutScrubPreview.visibility = View.VISIBLE
+
+        resetOverlayHideTimer()
+    }
+
+    /**
+     * Commit the scrubbed target position to ExoPlayer
+     */
+    private fun commitScrub() {
+        commitScrubRunnable?.let { mainHandler.removeCallbacks(it) }
+        commitScrubRunnable = null
+
+        if (!isScrubbing) return
+        isScrubbing = false
+
+        Log.i(TAG, "Committing scrub position to: $scrubTargetMs ms")
+        playerManager.seekTo(scrubTargetMs)
+        updateOverlayProgress(scrubTargetMs)
+
+        binding.layoutScrubPreview.animate()
+            .alpha(0f)
+            .setDuration(TvPlayerConfig.Scrubbing.TOOLTIP_FADE_DURATION_MS)
+            .withEndAction {
+                binding.layoutScrubPreview.visibility = View.INVISIBLE
+                binding.layoutScrubPreview.alpha = 1f
+            }
+            .start()
+
+        resetOverlayHideTimer()
+    }
+
+    /**
+     * Cancel scrubbing without seeking
+     */
+    private fun cancelScrub() {
+        commitScrubRunnable?.let { mainHandler.removeCallbacks(it) }
+        commitScrubRunnable = null
+
+        if (!isScrubbing) return
+        isScrubbing = false
+
+        binding.layoutScrubPreview.visibility = View.INVISIBLE
+        updateOverlayProgress()
+        Log.i(TAG, "Scrubbing cancelled, restored to origin")
+    }
+
+    private fun scheduleCommitScrub() {
+        if (!isScrubbing) return
+        commitScrubRunnable?.let { mainHandler.removeCallbacks(it) }
+        val r = Runnable { commitScrub() }
+        commitScrubRunnable = r
+        mainHandler.postDelayed(r, TvPlayerConfig.Scrubbing.COMMIT_DEBOUNCE_DELAY_MS)
     }
 
     private fun showOverlay(focusOnSeekBar: Boolean = false) {
@@ -287,6 +391,7 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
     }
 
     private fun hideOverlay() {
+        cancelScrub()
         binding.playbackOverlay.visibility = View.GONE
         stopProgressUpdates()
         hideOverlayRunnable?.let { mainHandler.removeCallbacks(it) }
@@ -304,7 +409,7 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
             }
         }
         hideOverlayRunnable = r
-        mainHandler.postDelayed(r, 5000L)
+        mainHandler.postDelayed(r, TvPlayerConfig.Overlay.AUTO_HIDE_DELAY_MS)
     }
 
     private fun startProgressUpdates() {
@@ -312,9 +417,11 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
         val r = object : Runnable {
             override fun run() {
                 if (isOverlayVisible()) {
-                    updateOverlayProgress()
+                    if (!isScrubbing) {
+                        updateOverlayProgress()
+                    }
                     updateOverlayClock()
-                    mainHandler.postDelayed(this, 500L)
+                    mainHandler.postDelayed(this, TvPlayerConfig.Overlay.PROGRESS_UPDATE_INTERVAL_MS)
                 }
             }
         }
@@ -384,7 +491,7 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
     private fun deactivateHoldingSpeed() {
         if (!isHoldingSpeed) return
         isHoldingSpeed = false
-        val normalSpeed = speedOptions[currentSpeedIndex]
+        val normalSpeed = TvPlayerConfig.PlaybackOptions.SPEED_OPTIONS[currentSpeedIndex]
         playerManager.setPlaybackSpeed(normalSpeed)
         binding.speedHudLayout.visibility = View.GONE
         Log.i(TAG, "Holding speed deactivated -> Restored to ${normalSpeed}x")
@@ -429,6 +536,7 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
     override fun onDestroy() {
         exitConfirmDialog?.dismiss()
         exitConfirmDialog = null
+        cancelScrub()
         deactivateHoldingSpeed()
         pendingSpeedHoldRunnable?.let { mainHandler.removeCallbacks(it) }
         pendingSpeedHoldRunnable = null
@@ -466,30 +574,46 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
                 if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
                     if (event?.repeatCount == 0) {
                         if (pendingSpeedHoldRunnable == null && !isHoldingSpeed) {
-                            val r = Runnable { activateHoldingSpeed(3.0f, "⏩ 3.0X 快进中") }
+                            val r = Runnable {
+                                activateHoldingSpeed(
+                                    TvPlayerConfig.HoldingSpeed.FAST_FORWARD_SPEED,
+                                    TvPlayerConfig.HoldingSpeed.HUD_FAST_FORWARD_TEXT
+                                )
+                            }
                             pendingSpeedHoldRunnable = r
-                            mainHandler.postDelayed(r, 280L)
+                            mainHandler.postDelayed(r, TvPlayerConfig.HoldingSpeed.TRIGGER_DELAY_MS)
                         }
                     } else if (event != null && event.repeatCount >= 1) {
                         if (!isHoldingSpeed) {
                             pendingSpeedHoldRunnable?.let { mainHandler.removeCallbacks(it) }
                             pendingSpeedHoldRunnable = null
-                            activateHoldingSpeed(3.0f, "⏩ 3.0X 快进中")
+                            activateHoldingSpeed(
+                                TvPlayerConfig.HoldingSpeed.FAST_FORWARD_SPEED,
+                                TvPlayerConfig.HoldingSpeed.HUD_FAST_FORWARD_TEXT
+                            )
                         }
                         return true
                     }
                 } else if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
                     if (event?.repeatCount == 0) {
                         if (pendingSpeedHoldRunnable == null && !isHoldingSpeed) {
-                            val r = Runnable { activateHoldingSpeed(0.5f, "⏪ 0.5X 慢放中") }
+                            val r = Runnable {
+                                activateHoldingSpeed(
+                                    TvPlayerConfig.HoldingSpeed.SLOW_MOTION_SPEED,
+                                    TvPlayerConfig.HoldingSpeed.HUD_SLOW_MOTION_TEXT
+                                )
+                            }
                             pendingSpeedHoldRunnable = r
-                            mainHandler.postDelayed(r, 280L)
+                            mainHandler.postDelayed(r, TvPlayerConfig.HoldingSpeed.TRIGGER_DELAY_MS)
                         }
                     } else if (event != null && event.repeatCount >= 1) {
                         if (!isHoldingSpeed) {
                             pendingSpeedHoldRunnable?.let { mainHandler.removeCallbacks(it) }
                             pendingSpeedHoldRunnable = null
-                            activateHoldingSpeed(0.5f, "⏪ 0.5X 慢放中")
+                            activateHoldingSpeed(
+                                TvPlayerConfig.HoldingSpeed.SLOW_MOTION_SPEED,
+                                TvPlayerConfig.HoldingSpeed.HUD_SLOW_MOTION_TEXT
+                            )
                         }
                         return true
                     }
@@ -537,7 +661,7 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
                     }
                     KeyEvent.KEYCODE_MEDIA_REWIND -> {
                         val current = playerManager.getCurrentPositionMs()
-                        val target = (current - 15000L).coerceAtLeast(0L)
+                        val target = (current - TvPlayerConfig.QuickSeek.REWIND_STEP_MS).coerceAtLeast(0L)
                         playerManager.seekTo(target)
                         showOverlay()
                         return true
@@ -545,7 +669,8 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
                     KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
                         val current = playerManager.getCurrentPositionMs()
                         val duration = playerManager.getDurationMs()
-                        val target = if (duration > 0) (current + 15000L).coerceAtMost(duration) else (current + 15000L)
+                        val step = TvPlayerConfig.QuickSeek.FORWARD_STEP_MS
+                        val target = if (duration > 0) (current + step).coerceAtMost(duration) else (current + step)
                         playerManager.seekTo(target)
                         showOverlay()
                         return true
@@ -567,21 +692,17 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
                 if (binding.overlaySeekBar.hasFocus()) {
                     when (keyCode) {
                         KeyEvent.KEYCODE_DPAD_LEFT -> {
-                            val current = playerManager.getCurrentPositionMs()
-                            val target = (current - 10000L).coerceAtLeast(0L)
-                            playerManager.seekTo(target)
-                            updateOverlayProgress(target)
+                            startOrUpdateScrub(isForward = false, repeatCount = event?.repeatCount ?: 0)
                             return true
                         }
                         KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                            val current = playerManager.getCurrentPositionMs()
-                            val duration = playerManager.getDurationMs()
-                            val target = if (duration > 0) (current + 10000L).coerceAtMost(duration) else (current + 10000L)
-                            playerManager.seekTo(target)
-                            updateOverlayProgress(target)
+                            startOrUpdateScrub(isForward = true, repeatCount = event?.repeatCount ?: 0)
                             return true
                         }
                         KeyEvent.KEYCODE_DPAD_DOWN -> {
+                            if (isScrubbing) {
+                                commitScrub()
+                            }
                             binding.btnOverlayPlayPause.requestFocus()
                             return true
                         }
@@ -589,8 +710,20 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
                             return true
                         }
                         KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                            playerManager.togglePlayPause()
-                            updateOverlayPlayPauseButton()
+                            if (isScrubbing) {
+                                commitScrub()
+                            } else {
+                                playerManager.togglePlayPause()
+                                updateOverlayPlayPauseButton()
+                            }
+                            return true
+                        }
+                        KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
+                            if (isScrubbing) {
+                                cancelScrub()
+                                return true
+                            }
+                            hideOverlay()
                             return true
                         }
                     }
@@ -622,6 +755,13 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
         if (binding.playerView.visibility == View.VISIBLE) {
+            if (isOverlayVisible() && binding.overlaySeekBar.hasFocus()) {
+                if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT || keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                    scheduleCommitScrub()
+                    return true
+                }
+            }
+
             if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT || keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
                 pendingSpeedHoldRunnable?.let { mainHandler.removeCallbacks(it) }
                 pendingSpeedHoldRunnable = null
