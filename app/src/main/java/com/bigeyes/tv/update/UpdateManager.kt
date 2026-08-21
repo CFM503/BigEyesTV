@@ -47,6 +47,17 @@ class UpdateManager(private val context: Context) {
         private var isLifecycleRegistered = false
 
         /**
+         * GitHub Release download acceleration mirrors (prioritized).
+         * Empty string at the end serves as the ultimate fallback to direct GitHub download.
+         */
+        val DOWNLOAD_MIRRORS = listOf(
+            "https://ghfast.top/",
+            "https://ghproxy.net/",
+            "https://gh-proxy.com/",
+            ""
+        )
+
+        /**
          * Cleans version string (e.g., 'bigeyes-tv-v1.0.2' -> '1.0.2', 'v1.0.1' -> '1.0.1')
          */
         fun cleanVersionTag(tag: String): String {
@@ -79,6 +90,35 @@ class UpdateManager(private val context: Context) {
                 if (r < c) return false
             }
             return false
+        }
+
+        /**
+         * Builds a list of candidate download URLs for a given GitHub asset URL.
+         * Prepends mirrors in priority order and appends the direct URL as fallback.
+         */
+        fun getCandidateDownloadUrls(originalUrl: String): List<String> {
+            if (originalUrl.isBlank()) return emptyList()
+            val urls = mutableListOf<String>()
+            for (mirror in DOWNLOAD_MIRRORS) {
+                if (mirror.isBlank()) {
+                    if (!urls.contains(originalUrl)) {
+                        urls.add(originalUrl)
+                    }
+                } else {
+                    val candidate = if (mirror.endsWith("/")) {
+                        mirror + originalUrl
+                    } else {
+                        "$mirror/$originalUrl"
+                    }
+                    if (!urls.contains(candidate)) {
+                        urls.add(candidate)
+                    }
+                }
+            }
+            if (!urls.contains(originalUrl)) {
+                urls.add(originalUrl)
+            }
+            return urls
         }
     }
 
@@ -122,6 +162,49 @@ class UpdateManager(private val context: Context) {
                 }
             }
         }
+    }
+
+    /**
+     * Opens connection with support for multi-protocol/cross-domain redirects (301, 302, 307, 308).
+     */
+    private fun openConnectionWithRedirects(
+        initialUrlStr: String,
+        connectTimeout: Int = 12000,
+        readTimeout: Int = 30000,
+        maxRedirects: Int = 5
+    ): HttpURLConnection {
+        var currentUrlStr = initialUrlStr
+        var redirects = 0
+        while (redirects < maxRedirects) {
+            val url = URL(currentUrlStr)
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                this.connectTimeout = connectTimeout
+                this.readTimeout = readTimeout
+                instanceFollowRedirects = false
+                setRequestProperty("User-Agent", "BigEyesTV-App")
+                setRequestProperty("Accept-Encoding", "identity")
+            }
+            val status = conn.responseCode
+            if (status == HttpURLConnection.HTTP_MOVED_TEMP ||
+                status == HttpURLConnection.HTTP_MOVED_PERM ||
+                status == HttpURLConnection.HTTP_SEE_OTHER ||
+                status == 307 || status == 308
+            ) {
+                val newUrl = conn.getHeaderField("Location")
+                conn.disconnect()
+                if (!newUrl.isNullOrBlank()) {
+                    currentUrlStr = if (newUrl.startsWith("http://") || newUrl.startsWith("https://")) {
+                        newUrl
+                    } else {
+                        URL(url, newUrl).toString()
+                    }
+                    redirects++
+                    continue
+                }
+            }
+            return conn
+        }
+        throw java.io.IOException("重定向次数过多 ($redirects)")
     }
 
     /**
@@ -211,7 +294,7 @@ class UpdateManager(private val context: Context) {
     }
 
     /**
-     * Downloads APK file with progress reporting and caching.
+     * Downloads APK file with multi-mirror acceleration, automatic failover, and progress reporting.
      */
     fun downloadApk(release: ReleaseInfo, listener: DownloadListener) {
         executor.execute {
@@ -231,49 +314,91 @@ class UpdateManager(private val context: Context) {
                     return@execute
                 }
 
-                if (apkFile.exists()) {
-                    apkFile.delete()
-                }
+                val candidateUrls = getCandidateDownloadUrls(release.apkDownloadUrl)
+                var downloadSuccess = false
+                var lastErrorMessage = "未知错误"
 
-                val url = URL(release.apkDownloadUrl)
-                val conn = (url.openConnection() as HttpURLConnection).apply {
-                    instanceFollowRedirects = true
-                    connectTimeout = 15000
-                    readTimeout = 30000
-                    setRequestProperty("User-Agent", "BigEyesTV-App")
-                }
+                for ((index, candidateUrl) in candidateUrls.withIndex()) {
+                    val isFallback = (candidateUrl == release.apkDownloadUrl)
+                    val mirrorLabel = if (isFallback) {
+                        "GitHub 官方直连 (保底)"
+                    } else {
+                        "国内加速镜像 [${index + 1}/${candidateUrls.size}]"
+                    }
+                    Log.i(TAG, "Attempting APK download via $mirrorLabel: $candidateUrl")
 
-                val totalLength = if (release.apkSize > 0) release.apkSize else conn.contentLength.toLong()
+                    // Clean any partial temp file before attempting next candidate
+                    if (apkFile.exists()) {
+                        apkFile.delete()
+                    }
 
-                conn.inputStream.use { input ->
-                    FileOutputStream(apkFile).use { output ->
-                        val buffer = ByteArray(8192)
-                        var downloaded = 0L
-                        var lastProgress = 0
-                        var bytesRead: Int
+                    var conn: HttpURLConnection? = null
+                    try {
+                        conn = openConnectionWithRedirects(candidateUrl, connectTimeout = 12000, readTimeout = 30000)
 
-                        while (input.read(buffer).also { bytesRead = it } != -1) {
-                            output.write(buffer, 0, bytesRead)
-                            downloaded += bytesRead
+                        val responseCode = conn.responseCode
+                        if (responseCode !in 200..299) {
+                            throw java.io.IOException("HTTP $responseCode: ${conn.responseMessage}")
+                        }
 
-                            if (totalLength > 0) {
-                                val progress = ((downloaded * 100) / totalLength).toInt()
-                                if (progress != lastProgress) {
-                                    lastProgress = progress
-                                    postOnMain {
-                                        listener.onProgress(progress, downloaded, totalLength)
+                        val totalLength = if (release.apkSize > 0) {
+                            release.apkSize
+                        } else {
+                            conn.contentLength.toLong()
+                        }
+
+                        conn.inputStream.use { input ->
+                            FileOutputStream(apkFile).use { output ->
+                                val buffer = ByteArray(8192)
+                                var downloaded = 0L
+                                var lastProgress = -1
+                                var bytesRead: Int
+
+                                while (input.read(buffer).also { bytesRead = it } != -1) {
+                                    output.write(buffer, 0, bytesRead)
+                                    downloaded += bytesRead
+
+                                    if (totalLength > 0) {
+                                        val progress = ((downloaded * 100) / totalLength).toInt().coerceIn(0, 100)
+                                        if (progress != lastProgress) {
+                                            lastProgress = progress
+                                            postOnMain {
+                                                listener.onProgress(progress, downloaded, totalLength)
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
+
+                        // Validate file size if known
+                        val actualSize = apkFile.length()
+                        if (actualSize > 0 && (release.apkSize <= 0 || actualSize == release.apkSize || (totalLength > 0 && actualSize == totalLength))) {
+                            Log.i(TAG, "Successfully downloaded APK ($actualSize bytes) via $mirrorLabel")
+                            downloadSuccess = true
+                            break
+                        } else if (actualSize > 0 && release.apkSize > 0 && actualSize != release.apkSize) {
+                            throw java.io.IOException("文件大小不匹配 (期望: ${release.apkSize}, 实际: $actualSize)")
+                        } else {
+                            throw java.io.IOException("下载文件为空")
+                        }
+
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Download failed via $mirrorLabel ($candidateUrl): ${e.message}")
+                        lastErrorMessage = e.message ?: "连接失败"
+                        apkFile.delete()
+                    } finally {
+                        try {
+                            conn?.disconnect()
+                        } catch (_: Exception) {}
                     }
                 }
 
-                if (apkFile.exists() && apkFile.length() > 0) {
+                if (downloadSuccess && apkFile.exists() && apkFile.length() > 0) {
                     val finalFile = apkFile
                     postOnMain { listener.onDownloadComplete(finalFile) }
                 } else {
-                    postOnMain { listener.onDownloadError("下载文件为空或失败") }
+                    postOnMain { listener.onDownloadError("下载失败（所有加速镜像及官方源均不可用）: $lastErrorMessage") }
                 }
 
             } catch (e: Exception) {

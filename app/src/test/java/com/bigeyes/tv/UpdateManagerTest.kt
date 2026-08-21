@@ -38,4 +38,19 @@ class UpdateManagerTest {
         assertFalse(UpdateManager.isNewerVersion("2.0.0", "1.9.9"))
         assertFalse(UpdateManager.isNewerVersion("1.1.0", "1.0.9"))
     }
+
+    @Test
+    fun testGetCandidateDownloadUrls() {
+        val originalUrl = "https://github.com/CFM503/BigEyesTV/releases/download/v1.0.7/BigEyesTV.apk"
+        val candidates = UpdateManager.getCandidateDownloadUrls(originalUrl)
+
+        // Should contain mirrors first and originalUrl as last fallback
+        assertTrue(candidates.size >= 2)
+        assertEquals("https://ghfast.top/$originalUrl", candidates[0])
+        assertEquals("https://ghproxy.net/$originalUrl", candidates[1])
+        assertEquals(originalUrl, candidates.last())
+
+        // Blank input returns empty list
+        assertTrue(UpdateManager.getCandidateDownloadUrls("").isEmpty())
+    }
 }
