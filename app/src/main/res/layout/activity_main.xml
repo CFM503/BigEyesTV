@@ -64,13 +64,19 @@
             android:layout_alignParentBottom="true"
             android:orientation="vertical">
 
-            <!-- Progress Bar and Times -->
+            <!-- Progress Bar and Times (Focusable for Android TV Remote) -->
             <LinearLayout
+                android:id="@+id/layoutProgressContainer"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:gravity="center_vertical"
-                android:layout_marginBottom="16dp">
+                android:layout_marginBottom="16dp"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:paddingTop="6dp"
+                android:paddingBottom="6dp"
+                android:background="@drawable/bg_seekbar_container">
 
                 <TextView
                     android:id="@+id/tvOverlayCurrentTime"
@@ -81,18 +87,21 @@
                     android:textSize="16sp"
                     android:textStyle="bold" />
 
-                <ProgressBar
-                    android:id="@+id/overlayProgressBar"
-                    style="?android:attr/progressBarStyleHorizontal"
+                <SeekBar
+                    android:id="@+id/overlaySeekBar"
                     android:layout_width="0dp"
-                    android:layout_height="8dp"
+                    android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:layout_marginStart="16dp"
-                    android:layout_marginEnd="16dp"
+                    android:layout_marginStart="14dp"
+                    android:layout_marginEnd="14dp"
                     android:max="1000"
                     android:progress="0"
-                    android:progressTint="@color/accent_blue"
-                    android:progressBackgroundTint="#40FFFFFF" />
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusDown="@+id/btnOverlayPlayPause"
+                    android:progressDrawable="@drawable/tv_seekbar_progress"
+                    android:thumb="@drawable/tv_seekbar_thumb"
+                    android:splitTrack="false" />
 
                 <TextView
                     android:id="@+id/tvOverlayTotalTime"
@@ -121,6 +130,7 @@
                     android:textSize="15sp"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
+                    android:nextFocusUp="@+id/overlaySeekBar"
                     android:paddingStart="20dp"
                     android:paddingEnd="20dp" />
 
@@ -135,6 +145,7 @@
                     android:textSize="15sp"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
+                    android:nextFocusUp="@+id/overlaySeekBar"
                     android:paddingStart="16dp"
                     android:paddingEnd="16dp" />
 
@@ -149,6 +160,7 @@
                     android:textSize="15sp"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
+                    android:nextFocusUp="@+id/overlaySeekBar"
                     android:paddingStart="16dp"
                     android:paddingEnd="16dp" />
 
@@ -163,6 +175,7 @@
                     android:textSize="15sp"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
+                    android:nextFocusUp="@+id/overlaySeekBar"
                     android:paddingStart="16dp"
                     android:paddingEnd="16dp" />
 
@@ -177,6 +190,7 @@
                     android:textSize="15sp"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
+                    android:nextFocusUp="@+id/overlaySeekBar"
                     android:paddingStart="16dp"
                     android:paddingEnd="16dp" />
 
@@ -191,6 +205,7 @@
                     android:textSize="15sp"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
+                    android:nextFocusUp="@+id/overlaySeekBar"
                     android:paddingStart="16dp"
                     android:paddingEnd="16dp" />
 
@@ -209,6 +224,7 @@
                     android:textSize="15sp"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
+                    android:nextFocusUp="@+id/overlaySeekBar"
                     android:paddingStart="20dp"
                     android:paddingEnd="20dp" />
 

@@ -1,6 +1,7 @@
 package com.bigeyes.tv.ui
 
 import android.app.ProgressDialog
+import android.graphics.Color
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -9,6 +10,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.SeekBar
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -170,6 +172,44 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
     }
 
     private fun setupOverlayControls() {
+        // Progress Bar (SeekBar) Focus & Interaction
+        binding.overlaySeekBar.setOnFocusChangeListener { _, hasFocus ->
+            binding.layoutProgressContainer.isActivated = hasFocus
+            if (hasFocus) {
+                binding.tvOverlayCurrentTime.setTextColor(Color.parseColor("#FFD700"))
+                binding.tvOverlayCurrentTime.textSize = 18f
+                resetOverlayHideTimer()
+            } else {
+                binding.tvOverlayCurrentTime.setTextColor(Color.WHITE)
+                binding.tvOverlayCurrentTime.textSize = 16f
+            }
+        }
+
+        binding.overlaySeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser) {
+                    val duration = playerManager.getDurationMs()
+                    if (duration > 0) {
+                        val targetMs = (progress.toFloat() / 1000f * duration).toLong()
+                        binding.tvOverlayCurrentTime.text = formatSecondsToTime(targetMs / 1000)
+                    }
+                }
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {
+                resetOverlayHideTimer()
+            }
+
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                val duration = playerManager.getDurationMs()
+                if (duration > 0 && seekBar != null) {
+                    val targetMs = (seekBar.progress.toFloat() / 1000f * duration).toLong()
+                    playerManager.seekTo(targetMs)
+                }
+                resetOverlayHideTimer()
+            }
+        })
+
         binding.btnOverlayPlayPause.setOnClickListener {
             playerManager.togglePlayPause()
             updateOverlayPlayPauseButton()
@@ -180,7 +220,7 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
             val current = playerManager.getCurrentPositionMs()
             val target = (current - 15000L).coerceAtLeast(0L)
             playerManager.seekTo(target)
-            updateOverlayProgress()
+            updateOverlayProgress(target)
             resetOverlayHideTimer()
         }
 
@@ -189,7 +229,7 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
             val duration = playerManager.getDurationMs()
             val target = if (duration > 0) (current + 15000L).coerceAtMost(duration) else (current + 15000L)
             playerManager.seekTo(target)
-            updateOverlayProgress()
+            updateOverlayProgress(target)
             resetOverlayHideTimer()
         }
 
@@ -228,15 +268,19 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
         }
     }
 
-    private fun showOverlay() {
+    private fun showOverlay(focusOnSeekBar: Boolean = false) {
         if (binding.playerView.visibility != View.VISIBLE) return
         binding.playbackOverlay.visibility = View.VISIBLE
         updateOverlayPlayPauseButton()
         updateOverlayHeader()
         updateOverlayProgress()
 
-        // Default focus on Play/Pause button
-        binding.btnOverlayPlayPause.requestFocus()
+        if (focusOnSeekBar) {
+            binding.overlaySeekBar.requestFocus()
+        } else {
+            // Default focus on Play/Pause button
+            binding.btnOverlayPlayPause.requestFocus()
+        }
 
         startProgressUpdates()
         resetOverlayHideTimer()
@@ -299,8 +343,8 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
         binding.tvOverlayClock.text = sdf.format(Date())
     }
 
-    private fun updateOverlayProgress() {
-        val currentMs = playerManager.getCurrentPositionMs()
+    private fun updateOverlayProgress(forcedCurrentMs: Long? = null) {
+        val currentMs = forcedCurrentMs ?: playerManager.getCurrentPositionMs()
         val durationMs = playerManager.getDurationMs()
 
         val curSec = currentMs / 1000
@@ -311,9 +355,9 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
 
         if (durSec > 0) {
             val progress = ((curSec.toFloat() / durSec.toFloat()) * 1000).toInt()
-            binding.overlayProgressBar.progress = progress.coerceIn(0, 1000)
+            binding.overlaySeekBar.progress = progress.coerceIn(0, 1000)
         } else {
-            binding.overlayProgressBar.progress = 0
+            binding.overlaySeekBar.progress = 0
         }
     }
 
@@ -398,11 +442,15 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
 
     /**
      * D-pad and TV Remote key event handling
-     * - Holding Right: 3.0x speed, release to restore 1.0x normal
-     * - Holding Left: 0.5x speed, release to restore 1.0x normal
-     * - Short tap OK / D-pad: Show control overlay (Scheme A)
-     * - Back key while overlay visible: Hide overlay only (keep playing)
-     * - Back key while overlay hidden: Show confirmation dialog to exit (Situation B)
+     * - When overlay is hidden:
+     *   - Holding Right: 3.0x speed, release to restore 1.0x normal
+     *   - Holding Left: 0.5x speed, release to restore 1.0x normal
+     *   - Short tap OK / D-pad: Show control overlay (Scheme A)
+     *   - Back key: Show confirmation dialog to exit (Situation B)
+     * - When overlay is visible:
+     *   - If overlaySeekBar is focused: Left/Right to adjust progress, Down to focus button bar, OK to play/pause
+     *   - If bottom buttons are focused: Up to focus overlaySeekBar, Left/Right to navigate buttons, OK to click
+     *   - Back key: Hide overlay only (keep playing)
      */
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         // If exit confirm dialog is currently showing, let it handle keys
@@ -412,41 +460,41 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
 
         // If player is currently active/visible
         if (binding.playerView.visibility == View.VISIBLE) {
-            // Handle long-press holding on Right (3.0x speed) and Left (0.5x speed)
-            if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
-                if (event?.repeatCount == 0) {
-                    if (pendingSpeedHoldRunnable == null && !isHoldingSpeed) {
-                        val r = Runnable { activateHoldingSpeed(3.0f, "⏩ 3.0X 快进中") }
-                        pendingSpeedHoldRunnable = r
-                        mainHandler.postDelayed(r, 280L)
-                    }
-                } else if (event != null && event.repeatCount >= 1) {
-                    if (!isHoldingSpeed) {
-                        pendingSpeedHoldRunnable?.let { mainHandler.removeCallbacks(it) }
-                        pendingSpeedHoldRunnable = null
-                        activateHoldingSpeed(3.0f, "⏩ 3.0X 快进中")
-                    }
-                    return true
-                }
-            } else if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
-                if (event?.repeatCount == 0) {
-                    if (pendingSpeedHoldRunnable == null && !isHoldingSpeed) {
-                        val r = Runnable { activateHoldingSpeed(0.5f, "⏪ 0.5X 慢放中") }
-                        pendingSpeedHoldRunnable = r
-                        mainHandler.postDelayed(r, 280L)
-                    }
-                } else if (event != null && event.repeatCount >= 1) {
-                    if (!isHoldingSpeed) {
-                        pendingSpeedHoldRunnable?.let { mainHandler.removeCallbacks(it) }
-                        pendingSpeedHoldRunnable = null
-                        activateHoldingSpeed(0.5f, "⏪ 0.5X 慢放中")
-                    }
-                    return true
-                }
-            }
-
             if (!isOverlayVisible()) {
-                // When overlay is hidden, any D-pad key, OK, or MENU brings up the control overlay
+                // When overlay is HIDDEN:
+                // Handle long-press holding on Right (3.0x speed) and Left (0.5x speed)
+                if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                    if (event?.repeatCount == 0) {
+                        if (pendingSpeedHoldRunnable == null && !isHoldingSpeed) {
+                            val r = Runnable { activateHoldingSpeed(3.0f, "⏩ 3.0X 快进中") }
+                            pendingSpeedHoldRunnable = r
+                            mainHandler.postDelayed(r, 280L)
+                        }
+                    } else if (event != null && event.repeatCount >= 1) {
+                        if (!isHoldingSpeed) {
+                            pendingSpeedHoldRunnable?.let { mainHandler.removeCallbacks(it) }
+                            pendingSpeedHoldRunnable = null
+                            activateHoldingSpeed(3.0f, "⏩ 3.0X 快进中")
+                        }
+                        return true
+                    }
+                } else if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                    if (event?.repeatCount == 0) {
+                        if (pendingSpeedHoldRunnable == null && !isHoldingSpeed) {
+                            val r = Runnable { activateHoldingSpeed(0.5f, "⏪ 0.5X 慢放中") }
+                            pendingSpeedHoldRunnable = r
+                            mainHandler.postDelayed(r, 280L)
+                        }
+                    } else if (event != null && event.repeatCount >= 1) {
+                        if (!isHoldingSpeed) {
+                            pendingSpeedHoldRunnable?.let { mainHandler.removeCallbacks(it) }
+                            pendingSpeedHoldRunnable = null
+                            activateHoldingSpeed(0.5f, "⏪ 0.5X 慢放中")
+                        }
+                        return true
+                    }
+                }
+
                 when (keyCode) {
                     KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
                         Log.i(TAG, "Remote BACK pressed while overlay hidden -> Showing exit confirm dialog")
@@ -454,10 +502,14 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
                         return true
                     }
                     KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
-                    KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_UP,
-                    KeyEvent.KEYCODE_MENU -> {
+                    KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_MENU -> {
                         Log.i(TAG, "Remote key $keyCode pressed -> Showing control overlay")
                         showOverlay()
+                        return true
+                    }
+                    KeyEvent.KEYCODE_DPAD_UP -> {
+                        Log.i(TAG, "Remote UP pressed -> Showing control overlay with focus on SeekBar")
+                        showOverlay(focusOnSeekBar = true)
                         return true
                     }
                     KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
@@ -500,7 +552,7 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
                     }
                 }
             } else {
-                // When overlay is visible, reset the 5s auto-hide timer on any user interaction
+                // When overlay is VISIBLE:
                 resetOverlayHideTimer()
 
                 when (keyCode) {
@@ -509,15 +561,57 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
                         hideOverlay()
                         return true
                     }
-                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                        val focused = currentFocus
-                        if (focused != null && focused is Button) {
-                            Log.i(TAG, "Remote OK clicked on focused button: ${focused.text}")
-                            focused.performClick()
+                }
+
+                // Check if progress bar (SeekBar) is currently focused
+                if (binding.overlaySeekBar.hasFocus()) {
+                    when (keyCode) {
+                        KeyEvent.KEYCODE_DPAD_LEFT -> {
+                            val current = playerManager.getCurrentPositionMs()
+                            val target = (current - 10000L).coerceAtLeast(0L)
+                            playerManager.seekTo(target)
+                            updateOverlayProgress(target)
+                            return true
+                        }
+                        KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                            val current = playerManager.getCurrentPositionMs()
+                            val duration = playerManager.getDurationMs()
+                            val target = if (duration > 0) (current + 10000L).coerceAtMost(duration) else (current + 10000L)
+                            playerManager.seekTo(target)
+                            updateOverlayProgress(target)
+                            return true
+                        }
+                        KeyEvent.KEYCODE_DPAD_DOWN -> {
+                            binding.btnOverlayPlayPause.requestFocus()
+                            return true
+                        }
+                        KeyEvent.KEYCODE_DPAD_UP -> {
+                            return true
+                        }
+                        KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                            playerManager.togglePlayPause()
+                            updateOverlayPlayPauseButton()
                             return true
                         }
                     }
+                } else {
+                    // One of the bottom buttons is focused
+                    when (keyCode) {
+                        KeyEvent.KEYCODE_DPAD_UP -> {
+                            binding.overlaySeekBar.requestFocus()
+                            return true
+                        }
+                        KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                            val focused = currentFocus
+                            if (focused != null && focused is Button) {
+                                Log.i(TAG, "Remote OK clicked on focused button: ${focused.text}")
+                                focused.performClick()
+                                return true
+                            }
+                        }
+                    }
                 }
+
                 // Let DPAD_LEFT, DPAD_RIGHT, DPAD_UP, DPAD_DOWN move focus normally across buttons
                 return super.onKeyDown(keyCode, event)
             }
