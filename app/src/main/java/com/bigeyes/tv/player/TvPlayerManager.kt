@@ -64,6 +64,9 @@ class TvPlayerManager private constructor(private val context: Context) {
                 }
                 currentState = newState
                 listeners.forEach { it.onStateChanged(newState) }
+                if (newState == PlayerState.READY || newState == PlayerState.BUFFERING) {
+                    listeners.forEach { it.onPlaybackStarted(currentUrl.orEmpty()) }
+                }
                 Log.d(TAG, "ExoPlayer state changed: $newState (playing=${player.isPlaying})")
             }
 
@@ -139,7 +142,11 @@ class TvPlayerManager private constructor(private val context: Context) {
     fun togglePlayPause() {
         runOnMain {
             val player = exoPlayer ?: return@runOnMain
-            val shouldPlay = !player.isPlaying
+            val endedAtPosition = player.playbackState == Player.STATE_ENDED
+            if (endedAtPosition) {
+                player.seekToDefaultPosition()
+            }
+            val shouldPlay = !player.isPlaying || endedAtPosition
             player.playWhenReady = shouldPlay
             Log.i(TAG, "Toggle play/pause: isPlaying now -> $shouldPlay")
         }

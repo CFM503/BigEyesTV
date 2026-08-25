@@ -267,8 +267,7 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
         }
 
         binding.btnOverlayExit.setOnClickListener {
-            hideOverlay()
-            playerManager.stop()
+            showExitPlaybackConfirmDialog()
         }
     }
 
@@ -375,7 +374,7 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
     private fun showOverlay(focusOnSeekBar: Boolean = false) {
         if (binding.playerView.visibility != View.VISIBLE) return
         binding.playbackOverlay.visibility = View.VISIBLE
-        updateOverlayPlayPauseButton()
+        syncOverlayControls()
         updateOverlayHeader()
         updateOverlayProgress()
 
@@ -432,6 +431,15 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
     private fun stopProgressUpdates() {
         progressUpdateRunnable?.let { mainHandler.removeCallbacks(it) }
         progressUpdateRunnable = null
+    }
+
+    private fun syncOverlayControls() {
+        updateOverlayPlayPauseButton()
+        currentSpeedIndex = TvPlayerConfig.PlaybackOptions.SPEED_OPTIONS
+            .indexOf(playerManager.getPlaybackSpeed())
+            .coerceAtLeast(0)
+        binding.btnOverlaySpeed.text =
+            "倍速 ${TvPlayerConfig.PlaybackOptions.SPEED_OPTIONS[currentSpeedIndex]}x"
     }
 
     private fun updateOverlayPlayPauseButton() {
@@ -715,6 +723,7 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
                             } else {
                                 playerManager.togglePlayPause()
                                 updateOverlayPlayPauseButton()
+                                resetOverlayHideTimer()
                             }
                             return true
                         }
@@ -756,7 +765,7 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
         if (binding.playerView.visibility == View.VISIBLE) {
             if (isOverlayVisible() && binding.overlaySeekBar.hasFocus()) {
-                if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT || keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                if (!isScrubbing && (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT || keyCode == KeyEvent.KEYCODE_DPAD_LEFT)) {
                     scheduleCommitScrub()
                     return true
                 }
