@@ -43,7 +43,15 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build Release APK
-        run: ./gradlew assembleRelease --stacktrace
+        run: ./gradlew assembleRelease --stacktrace --info > gradle-build.log 2>&1 || (cat gradle-build.log && exit 1)
+
+      - name: Upload Gradle Build Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-log-${{ github.ref_name }}
+          path: gradle-build.log
+          if-no-files-found: warn
 
       - name: Create GitHub Release and Upload APK
         uses: softprops/action-gh-release@v2
