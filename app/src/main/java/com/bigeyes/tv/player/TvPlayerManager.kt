@@ -34,6 +34,11 @@ class TvPlayerManager private constructor(private val context: Context) {
     var currentState: PlayerState = PlayerState.IDLE
         private set
 
+    private var activeUrl: String? = null
+    private var lastKnownPositionMs = 0L
+    private var recoveryAttempts = 0
+    private var recoveryRunnable: Runnable? = null
+
     init {
         mainHandler.post {
             initPlayerOnMainThread()
@@ -45,6 +50,14 @@ class TvPlayerManager private constructor(private val context: Context) {
         val player = ExoPlayer.Builder(context).build()
         player.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_READY || playbackState == Player.STATE_BUFFERING) {
+                    val position = exoPlayer?.currentPosition ?: 0L
+                    if (position > 0L) {
+                        lastKnownPositionMs = position
+                    }
+                    resetRecovery()
+                }
+
                 if (playbackState == Player.STATE_ENDED) {
                     val next = nextUrl
                     if (!next.isNullOrBlank()) {
@@ -53,6 +66,11 @@ class TvPlayerManager private constructor(private val context: Context) {
                         play(next, 0L)
                         return
                     }
+                }
+
+                if (playbackState == Player.STATE_IDLE && activeUrl != null) {
+                    scheduleRecovery()
+                    return
                 }
 
                 val newState = when (playbackState) {
@@ -71,10 +89,16 @@ class TvPlayerManager private constructor(private val context: Context) {
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                currentState = PlayerState.ERROR
                 val msg = error.message ?: "Playback error: ${error.errorCodeName}"
                 Log.e(TAG, "ExoPlayer error: $msg", error)
-                listeners.forEach { it.onError(msg) }
+                if (activeUrl == null) {
+                    notifyError(msg)
+                    return
+                }
+                exoPlayer?.currentPosition?.takeIf { it > 0L }?.let {
+                    lastKnownPositionMs = it
+                }
+                scheduleRecovery()
             }
         })
         exoPlayer = player
@@ -109,15 +133,14 @@ class TvPlayerManager private constructor(private val context: Context) {
     fun play(url: String, startPositionMs: Long = 0L) {
         Log.i(TAG, "Play request received: url=$url, startPositionMs=$startPositionMs")
         currentUrl = url
+        activeUrl = url
+        lastKnownPositionMs = startPositionMs.coerceAtLeast(0L)
+        resetRecovery()
         runOnMain {
             initPlayerOnMainThread()
             val player = exoPlayer ?: return@runOnMain
             try {
-                val mediaItem = MediaItem.fromUri(Uri.parse(url))
-                player.setMediaItem(mediaItem, startPositionMs)
-                player.prepare()
-                player.playWhenReady = true
-                listeners.forEach { it.onPlaybackStarted(url) }
+                prepareCurrentMediaItem(player, startPositionMs)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start playback for $url", e)
                 listeners.forEach { it.onError("Play error: ${e.message}") }
@@ -135,7 +158,18 @@ class TvPlayerManager private constructor(private val context: Context) {
     fun resume() {
         Log.i(TAG, "Resume request received")
         runOnMain {
-            exoPlayer?.playWhenReady = true
+            initPlayerOnMainThread()
+            val player = exoPlayer
+            if (player == null) {
+                activeUrl?.let { play(it, 0L) }
+                return@runOnMain
+            }
+
+            if (player.mediaItemCount == 0 && activeUrl != null && currentUrl == activeUrl) {
+                prepareCurrentMediaItem(player, lastKnownPositionMs)
+            } else {
+                player.playWhenReady = true
+            }
         }
     }
 
@@ -145,6 +179,10 @@ class TvPlayerManager private constructor(private val context: Context) {
             val endedAtPosition = player.playbackState == Player.STATE_ENDED
             if (endedAtPosition) {
                 player.seekToDefaultPosition()
+            }
+            if (player.mediaItemCount == 0 && activeUrl != null && currentUrl == activeUrl) {
+                prepareCurrentMediaItem(player, lastKnownPositionMs)
+                return@runOnMain
             }
             val shouldPlay = !player.isPlaying || endedAtPosition
             player.playWhenReady = shouldPlay
@@ -189,6 +227,8 @@ class TvPlayerManager private constructor(private val context: Context) {
     fun stop() {
         Log.i(TAG, "Stop request received")
         currentUrl = null
+        activeUrl = null
+        cancelRecovery()
         nextUrl = null
         runOnMain {
             exoPlayer?.stop()
@@ -200,6 +240,8 @@ class TvPlayerManager private constructor(private val context: Context) {
 
     fun release() {
         runOnMain {
+            activeUrl = null
+            cancelRecovery()
             exoPlayer?.release()
             exoPlayer = null
         }
@@ -225,6 +267,68 @@ class TvPlayerManager private constructor(private val context: Context) {
     fun getCurrentPositionMs(): Long {
         val pos = exoPlayer?.currentPosition ?: 0L
         return if (pos > 0) pos else 0L
+    }
+
+    private fun prepareCurrentMediaItem(player: ExoPlayer, startPositionMs: Long) {
+        val url = activeUrl ?: return
+        try {
+            player.setMediaItem(MediaItem.fromUri(Uri.parse(url)), startPositionMs)
+            player.prepare()
+            player.playWhenReady = true
+            listeners.forEach { it.onPlaybackStarted(url) }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to prepare playback for $url", e)
+            notifyError("Play error: ${e.message}")
+        }
+    }
+
+    private fun scheduleRecovery() {
+        if (recoveryRunnable != null || activeUrl.isNullOrBlank()) return
+        if (recoveryAttempts >= TvPlayerConfig.Recovery.MAX_ATTEMPTS) {
+            val url = activeUrl
+            activeUrl = null
+            cancelRecovery()
+            notifyError("Playback failed after recovery attempts")
+            Log.e(TAG, "Recovery exhausted for $url")
+            return
+        }
+
+        val delayMs = minOf(
+            TvPlayerConfig.Recovery.INITIAL_DELAY_MS shl recoveryAttempts,
+            TvPlayerConfig.Recovery.MAX_DELAY_MS
+        )
+        recoveryAttempts++
+        Log.w(TAG, "Scheduling playback recovery #$recoveryAttempts in ${delayMs}ms")
+        currentState = PlayerState.BUFFERING
+        listeners.forEach { it.onStateChanged(PlayerState.BUFFERING) }
+
+        val runnable = Runnable {
+            recoveryRunnable = null
+            val player = exoPlayer
+            val url = activeUrl
+            if (player != null && !url.isNullOrBlank()) {
+                prepareCurrentMediaItem(player, lastKnownPositionMs)
+            } else if (url != null) {
+                mainHandler.post { play(url, 0L) }
+            }
+        }
+        recoveryRunnable = runnable
+        mainHandler.postDelayed(runnable, delayMs)
+    }
+
+    private fun resetRecovery() {
+        recoveryAttempts = 0
+        cancelRecovery()
+    }
+
+    private fun cancelRecovery() {
+        recoveryRunnable?.let(mainHandler::removeCallbacks)
+        recoveryRunnable = null
+    }
+
+    private fun notifyError(message: String) {
+        currentState = PlayerState.ERROR
+        listeners.forEach { it.onError(message) }
     }
 
     private fun runOnMain(block: () -> Unit) {

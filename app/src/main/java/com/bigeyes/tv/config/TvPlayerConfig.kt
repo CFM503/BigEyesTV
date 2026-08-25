@@ -8,6 +8,15 @@ import androidx.media3.ui.AspectRatioFrameLayout
 object TvPlayerConfig {
 
     /**
+     * Automatic playback recovery configuration.
+     */
+    object Recovery {
+        const val MAX_ATTEMPTS = 5
+        const val INITIAL_DELAY_MS = 1000L
+        const val MAX_DELAY_MS = 16000L
+    }
+
+    /**
      * 控制面板与定时器配置
      */
     object Overlay {
