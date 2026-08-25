@@ -435,9 +435,9 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
 
     private fun syncOverlayControls() {
         updateOverlayPlayPauseButton()
-        currentSpeedIndex = TvPlayerConfig.PlaybackOptions.SPEED_OPTIONS
-            .indexOf(playerManager.getPlaybackSpeed())
-            .coerceAtLeast(0)
+        val currentSpeed = playerManager.getPlaybackSpeed()
+        val speedIndex = TvPlayerConfig.PlaybackOptions.SPEED_OPTIONS.indexOfFirst { it == currentSpeed }
+        currentSpeedIndex = if (speedIndex >= 0) speedIndex else 0
         binding.btnOverlaySpeed.text =
             "倍速 ${TvPlayerConfig.PlaybackOptions.SPEED_OPTIONS[currentSpeedIndex]}x"
     }
