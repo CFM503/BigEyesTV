@@ -185,6 +185,25 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
             }
         }
 
+        binding.overlaySeekBar.setOnKeyListener { _, keyCode, event ->
+            if (event?.action == KeyEvent.ACTION_DOWN &&
+                (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT)
+            ) {
+                startOrUpdateScrub(
+                    isForward = keyCode == KeyEvent.KEYCODE_DPAD_RIGHT,
+                    repeatCount = event.repeatCount
+                )
+                true
+            } else if (event?.action == KeyEvent.ACTION_UP &&
+                (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT)
+            ) {
+                commitScrub()
+                true
+            } else {
+                false
+            }
+        }
+
         binding.overlaySeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 if (fromUser) {
@@ -361,14 +380,6 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
         binding.layoutScrubPreview.visibility = View.INVISIBLE
         updateOverlayProgress()
         Log.i(TAG, "Scrubbing cancelled, restored to origin")
-    }
-
-    private fun scheduleCommitScrub() {
-        if (!isScrubbing) return
-        commitScrubRunnable?.let { mainHandler.removeCallbacks(it) }
-        val r = Runnable { commitScrub() }
-        commitScrubRunnable = r
-        mainHandler.postDelayed(r, TvPlayerConfig.Scrubbing.COMMIT_DEBOUNCE_DELAY_MS)
     }
 
     private fun showOverlay(focusOnSeekBar: Boolean = false) {
@@ -765,8 +776,8 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
         if (binding.playerView.visibility == View.VISIBLE) {
             if (isOverlayVisible() && binding.overlaySeekBar.hasFocus()) {
-                if (!isScrubbing && (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT || keyCode == KeyEvent.KEYCODE_DPAD_LEFT)) {
-                    scheduleCommitScrub()
+                if (isScrubbing && (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT || keyCode == KeyEvent.KEYCODE_DPAD_LEFT)) {
+                    commitScrub()
                     return true
                 }
             }
