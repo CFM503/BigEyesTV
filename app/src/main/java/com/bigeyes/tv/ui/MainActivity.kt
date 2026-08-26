@@ -40,6 +40,7 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
     private var updateDialog: AlertDialog? = null
     private var downloadProgressDialog: ProgressDialog? = null
     private var exitConfirmDialog: AlertDialog? = null
+    private var networkInterruptedDialog: AlertDialog? = null
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var hideOverlayRunnable: Runnable? = null
@@ -232,24 +233,6 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
         binding.btnOverlayPlayPause.setOnClickListener {
             playerManager.togglePlayPause()
             updateOverlayPlayPauseButton()
-            resetOverlayHideTimer()
-        }
-
-        binding.btnOverlayRewind.setOnClickListener {
-            val current = playerManager.getCurrentPositionMs()
-            val target = (current - TvPlayerConfig.QuickSeek.REWIND_STEP_MS).coerceAtLeast(0L)
-            playerManager.seekTo(target)
-            updateOverlayProgress(target)
-            resetOverlayHideTimer()
-        }
-
-        binding.btnOverlayForward.setOnClickListener {
-            val current = playerManager.getCurrentPositionMs()
-            val duration = playerManager.getDurationMs()
-            val step = TvPlayerConfig.QuickSeek.FORWARD_STEP_MS
-            val target = if (duration > 0) (current + step).coerceAtMost(duration) else (current + step)
-            playerManager.seekTo(target)
-            updateOverlayProgress(target)
             resetOverlayHideTimer()
         }
 
@@ -555,11 +538,14 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
     override fun onDestroy() {
         exitConfirmDialog?.dismiss()
         exitConfirmDialog = null
+        networkInterruptedDialog?.dismiss()
+        networkInterruptedDialog = null
         cancelScrub()
         deactivateHoldingSpeed()
         pendingSpeedHoldRunnable?.let { mainHandler.removeCallbacks(it) }
         pendingSpeedHoldRunnable = null
         hideOverlay()
+        hideBufferingOverlay()
         updateDialog?.dismiss()
         downloadProgressDialog?.dismiss()
         playerManager.removeListener(this)
@@ -580,13 +566,24 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
      *   - Back key: Hide overlay only (keep playing)
      */
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        // If exit confirm dialog is currently showing, let it handle keys
-        if (exitConfirmDialog?.isShowing == true) {
+        // If exit confirm dialog or network interrupted dialog is currently showing, let it handle keys
+        if (exitConfirmDialog?.isShowing == true || networkInterruptedDialog?.isShowing == true) {
             return super.onKeyDown(keyCode, event)
         }
 
         // If player is currently active/visible
         if (binding.playerView.visibility == View.VISIBLE) {
+            // When buffering overlay is visible, only allow BACK to exit
+            if (binding.bufferingOverlay.visibility == View.VISIBLE) {
+                if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE) {
+                    Log.i(TAG, "Remote BACK pressed during buffering -> Showing exit confirm dialog")
+                    showExitPlaybackConfirmDialog()
+                    return true
+                }
+                // Ignore other keys during buffering
+                return true
+            }
+
             if (!isOverlayVisible()) {
                 // When overlay is HIDDEN:
                 // Handle long-press holding on Right (3.0x speed) and Left (0.5x speed)
@@ -676,22 +673,6 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
                     }
                     KeyEvent.KEYCODE_MEDIA_STOP -> {
                         playerManager.stop()
-                        return true
-                    }
-                    KeyEvent.KEYCODE_MEDIA_REWIND -> {
-                        val current = playerManager.getCurrentPositionMs()
-                        val target = (current - TvPlayerConfig.QuickSeek.REWIND_STEP_MS).coerceAtLeast(0L)
-                        playerManager.seekTo(target)
-                        showOverlay()
-                        return true
-                    }
-                    KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
-                        val current = playerManager.getCurrentPositionMs()
-                        val duration = playerManager.getDurationMs()
-                        val step = TvPlayerConfig.QuickSeek.FORWARD_STEP_MS
-                        val target = if (duration > 0) (current + step).coerceAtMost(duration) else (current + step)
-                        playerManager.seekTo(target)
-                        showOverlay()
                         return true
                     }
                 }
@@ -802,17 +783,27 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
     override fun onStateChanged(state: PlayerState) {
         runOnUiThread {
             when (state) {
-                PlayerState.READY, PlayerState.BUFFERING -> {
+                PlayerState.READY -> {
                     showPlayer()
+                    hideBufferingOverlay()
+                }
+                PlayerState.BUFFERING -> {
+                    showPlayer()
+                    // Show buffering overlay only if not already showing (e.g., from onBufferingStateChanged)
+                    if (binding.bufferingOverlay.visibility != View.VISIBLE) {
+                        showBufferingOverlay("正在缓冲...")
+                    }
                 }
                 PlayerState.IDLE, PlayerState.ENDED -> {
                     deactivateHoldingSpeed()
                     hideOverlay()
+                    hideBufferingOverlay()
                     showStandby()
                 }
                 PlayerState.ERROR -> {
                     deactivateHoldingSpeed()
                     hideOverlay()
+                    hideBufferingOverlay()
                     showStandby()
                 }
             }
@@ -840,7 +831,86 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
             Log.e(TAG, "Playback error: $error")
             deactivateHoldingSpeed()
             hideOverlay()
+            hideBufferingOverlay()
             showStandby()
+        }
+    }
+
+    override fun onBufferingStateChanged(isBuffering: Boolean, message: String) {
+        runOnUiThread {
+            if (isBuffering) {
+                showBufferingOverlay(message)
+            } else {
+                hideBufferingOverlay()
+            }
+        }
+    }
+
+    override fun onNetworkRetry(attempt: Int, maxAttempts: Int) {
+        runOnUiThread {
+            val message = "网络不稳定，正在尝试恢复... ($attempt/$maxAttempts)"
+            updateBufferingMessage(message)
+            Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    override fun onNetworkInterrupted(lastPositionMs: Long) {
+        runOnUiThread {
+            showNetworkInterruptedDialog(lastPositionMs)
+        }
+    }
+
+    private fun showBufferingOverlay(message: String) {
+        if (binding.playerView.visibility != View.VISIBLE) return
+        binding.bufferingOverlay.visibility = View.VISIBLE
+        binding.tvBufferingMessage.text = message
+        binding.tvBufferingHint.visibility = View.GONE
+        Log.i(TAG, "Buffering overlay shown: $message")
+    }
+
+    private fun hideBufferingOverlay() {
+        binding.bufferingOverlay.visibility = View.GONE
+    }
+
+    private fun updateBufferingMessage(message: String) {
+        binding.tvBufferingMessage.text = message
+        binding.tvBufferingHint.visibility = View.VISIBLE
+    }
+
+    private fun showNetworkInterruptedDialog(lastPositionMs: Long) {
+        if (networkInterruptedDialog?.isShowing == true) return
+        hideBufferingOverlay()
+
+        val positionText = if (lastPositionMs > 0) {
+            val seconds = lastPositionMs / 1000
+            val minutes = seconds / 60
+            val secs = seconds % 60
+            "\n\n上次播放位置：${minutes}:${String.format("%02d", secs)}"
+        } else ""
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("网络连接中断")
+            .setMessage("无法连接到网络，视频播放已暂停。请检查网络连接后重试。$positionText")
+            .setCancelable(false)
+            .setPositiveButton("重新连接") { _, _ ->
+                playerManager.manualRetry()
+            }
+            .setNegativeButton("返回主页") { _, _ ->
+                playerManager.cancelAndReturnToStandby()
+            }
+            .setOnDismissListener {
+                networkInterruptedDialog = null
+            }
+            .create()
+
+        networkInterruptedDialog = dialog
+        dialog.show()
+
+        // Focus "重新连接" for TV remote control
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.apply {
+            isFocusable = true
+            isFocusableInTouchMode = true
+            requestFocus()
         }
     }
 

@@ -16,6 +16,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 /**
  * Unified ExoPlayer controller for both AirPlay and DLNA playback sessions.
  * Manages player lifecycle, thread dispatching, and state queries.
+ * Includes intelligent buffering detection and network recovery mechanisms.
  */
 class TvPlayerManager private constructor(private val context: Context) {
 
@@ -35,11 +36,28 @@ class TvPlayerManager private constructor(private val context: Context) {
     var currentState: PlayerState = PlayerState.IDLE
         private set
 
+    @Volatile
+    var isBuffering: Boolean = false
+        private set
+
+    @Volatile
+    var bufferingMessage: String = ""
+        private set
+
     private var activeUrl: String? = null
     private var lastKnownPositionMs = 0L
     private var recoveryAttempts = 0
     private var recoveryRunnable: Runnable? = null
     private var resumePlaybackOnFirstFrame = false
+
+    // Buffering timeout detection
+    private var bufferingStartTime = 0L
+    private var bufferingTimeoutRunnable: Runnable? = null
+    private var bufferingShowIndicatorRunnable: Runnable? = null
+
+    // Auto-retry for network recovery
+    private var autoRetryCount = 0
+    private var autoRetryRunnable: Runnable? = null
 
     init {
         mainHandler.post {
@@ -68,6 +86,8 @@ class TvPlayerManager private constructor(private val context: Context) {
                 }
 
                 if (playbackState == Player.STATE_ENDED) {
+                    cancelBufferingTimeout()
+                    cancelAutoRetry()
                     val next = nextUrl
                     if (!next.isNullOrBlank()) {
                         Log.i(TAG, "Current episode ended. Auto-advancing to preloaded next URL: $next")
@@ -89,6 +109,10 @@ class TvPlayerManager private constructor(private val context: Context) {
                     Player.STATE_ENDED -> PlayerState.ENDED
                     else -> PlayerState.IDLE
                 }
+
+                // Handle buffering state transitions
+                handleBufferingStateChange(newState, playbackState)
+
                 currentState = newState
                 listeners.forEach { it.onStateChanged(newState) }
                 if (newState == PlayerState.READY || newState == PlayerState.BUFFERING) {
@@ -100,6 +124,9 @@ class TvPlayerManager private constructor(private val context: Context) {
             override fun onPlayerError(error: PlaybackException) {
                 val msg = error.message ?: "Playback error: ${error.errorCodeName}"
                 Log.e(TAG, "ExoPlayer error: $msg", error)
+                cancelBufferingTimeout()
+                cancelAutoRetry()
+
                 if (activeUrl == null) {
                     notifyError(msg)
                     return
@@ -112,6 +139,152 @@ class TvPlayerManager private constructor(private val context: Context) {
         })
         exoPlayer = player
         Log.i(TAG, "ExoPlayer initialized on main thread.")
+    }
+
+    /**
+     * Handle buffering state transitions with timeout detection and user feedback.
+     */
+    private fun handleBufferingStateChange(newState: PlayerState, playbackState: Int) {
+        when (newState) {
+            PlayerState.BUFFERING -> {
+                // Start buffering timeout detection
+                if (bufferingStartTime == 0L) {
+                    bufferingStartTime = System.currentTimeMillis()
+                    startBufferingTimeout()
+                }
+
+                // Show buffering indicator after delay (avoid flickering)
+                if (!isBuffering) {
+                    bufferingShowIndicatorRunnable?.let { mainHandler.removeCallbacks(it) }
+                    bufferingShowIndicatorRunnable = Runnable {
+                        if (currentState == PlayerState.BUFFERING) {
+                            isBuffering = true
+                            bufferingMessage = "正在缓冲..."
+                            listeners.forEach { it.onBufferingStateChanged(true, bufferingMessage) }
+                            Log.i(TAG, "Buffering indicator shown")
+                        }
+                    }
+                    mainHandler.postDelayed(
+                        bufferingShowIndicatorRunnable!!,
+                        TvPlayerConfig.Buffering.SHOW_INDICATOR_DELAY_MS
+                    )
+                }
+            }
+            PlayerState.READY -> {
+                // Buffering completed, reset all buffering state
+                cancelBufferingTimeout()
+                cancelAutoRetry()
+                if (isBuffering) {
+                    isBuffering = false
+                    bufferingMessage = ""
+                    bufferingStartTime = 0L
+                    bufferingShowIndicatorRunnable?.let { mainHandler.removeCallbacks(it) }
+                    listeners.forEach { it.onBufferingStateChanged(false, "") }
+                    Log.i(TAG, "Buffering completed, playback resumed")
+                }
+            }
+            else -> {
+                // Other states: cancel buffering timeout
+                cancelBufferingTimeout()
+                if (isBuffering) {
+                    isBuffering = false
+                    bufferingMessage = ""
+                    bufferingStartTime = 0L
+                    bufferingShowIndicatorRunnable?.let { mainHandler.removeCallbacks(it) }
+                }
+            }
+        }
+    }
+
+    /**
+     * Start buffering timeout detection.
+     * If buffering exceeds timeout, attempt auto-recovery or show dialog.
+     */
+    private fun startBufferingTimeout() {
+        cancelBufferingTimeout()
+        bufferingTimeoutRunnable = Runnable {
+            val bufferingDuration = System.currentTimeMillis() - bufferingStartTime
+            Log.w(TAG, "Buffering timeout detected: ${bufferingDuration}ms")
+
+            if (autoRetryCount < TvPlayerConfig.Buffering.MAX_AUTO_RETRIES) {
+                // Try auto-recovery first
+                autoRetryCount++
+                val message = "网络不稳定，正在尝试恢复... ($autoRetryCount/${TvPlayerConfig.Buffering.MAX_AUTO_RETRIES})"
+                isBuffering = true
+                bufferingMessage = message
+                listeners.forEach { it.onBufferingStateChanged(true, message) }
+                listeners.forEach { it.onNetworkRetry(autoRetryCount, TvPlayerConfig.Buffering.MAX_AUTO_RETRIES) }
+
+                // Schedule auto-retry
+                autoRetryRunnable = Runnable {
+                    if (activeUrl != null && currentState == PlayerState.BUFFERING) {
+                        Log.i(TAG, "Auto-retry #$autoRetryCount attempting to recover playback")
+                        attemptRecovery()
+                    }
+                }
+                mainHandler.postDelayed(autoRetryRunnable!!, TvPlayerConfig.Buffering.AUTO_RETRY_INTERVAL_MS)
+            } else {
+                // Max retries reached, notify UI to show dialog
+                isBuffering = true
+                bufferingMessage = "网络连接中断"
+                listeners.forEach { it.onBufferingStateChanged(true, bufferingMessage) }
+                listeners.forEach { it.onNetworkInterrupted(lastKnownPositionMs) }
+                Log.e(TAG, "Network interrupted, max auto-retries reached")
+            }
+        }
+        mainHandler.postDelayed(bufferingTimeoutRunnable!!, TvPlayerConfig.Buffering.TIMEOUT_MS)
+    }
+
+    /**
+     * Attempt to recover playback after network interruption.
+     */
+    private fun attemptRecovery() {
+        val url = activeUrl ?: return
+        val player = exoPlayer ?: return
+
+        try {
+            Log.i(TAG, "Attempting recovery from position: $lastKnownPositionMs ms")
+            // Re-prepare the media item from last known position
+            prepareCurrentMediaItem(player, lastKnownPositionMs)
+        } catch (e: Exception) {
+            Log.e(TAG, "Recovery attempt failed: ${e.message}")
+            scheduleRecovery()
+        }
+    }
+
+    /**
+     * Manual retry triggered by user dialog.
+     */
+    fun manualRetry() {
+        Log.i(TAG, "Manual retry requested by user")
+        autoRetryCount = 0
+        cancelBufferingTimeout()
+        cancelAutoRetry()
+
+        if (activeUrl != null) {
+            isBuffering = true
+            bufferingMessage = "正在重新连接..."
+            listeners.forEach { it.onBufferingStateChanged(true, bufferingMessage) }
+            attemptRecovery()
+        }
+    }
+
+    /**
+     * Cancel playback and return to standby.
+     */
+    fun cancelAndReturnToStandby() {
+        Log.i(TAG, "User cancelled playback, returning to standby")
+        stop()
+    }
+
+    private fun cancelBufferingTimeout() {
+        bufferingTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+        bufferingTimeoutRunnable = null
+    }
+
+    private fun cancelAutoRetry() {
+        autoRetryRunnable?.let { mainHandler.removeCallbacks(it) }
+        autoRetryRunnable = null
     }
 
     fun attachPlayerView(playerView: PlayerView) {
@@ -154,11 +327,22 @@ class TvPlayerManager private constructor(private val context: Context) {
      * Called by both AirPlay POST /play and DLNA SetAVTransportURI / Play.
      */
     fun play(url: String, startPositionMs: Long = 0L) {
+        val previousUrl = currentUrl
+        if (!previousUrl.isNullOrBlank() && previousUrl != url) {
+            Log.w(TAG, "New play request interrupting previous playback: previousUrl=$previousUrl, newUrl=$url")
+        }
         Log.i(TAG, "Play request received: url=$url, startPositionMs=$startPositionMs")
         currentUrl = url
         activeUrl = url
         lastKnownPositionMs = startPositionMs.coerceAtLeast(0L)
         resetRecovery()
+        cancelBufferingTimeout()
+        cancelAutoRetry()
+        autoRetryCount = 0
+        isBuffering = false
+        bufferingMessage = ""
+        bufferingStartTime = 0L
+
         runOnMain {
             initPlayerOnMainThread()
             val player = exoPlayer ?: return@runOnMain
@@ -252,7 +436,13 @@ class TvPlayerManager private constructor(private val context: Context) {
         currentUrl = null
         activeUrl = null
         cancelRecovery()
+        cancelBufferingTimeout()
+        cancelAutoRetry()
         nextUrl = null
+        autoRetryCount = 0
+        isBuffering = false
+        bufferingMessage = ""
+        bufferingStartTime = 0L
         runOnMain {
             exoPlayer?.stop()
             exoPlayer?.clearMediaItems()
@@ -265,6 +455,8 @@ class TvPlayerManager private constructor(private val context: Context) {
         runOnMain {
             activeUrl = null
             cancelRecovery()
+            cancelBufferingTimeout()
+            cancelAutoRetry()
             exoPlayer?.release()
             exoPlayer = null
         }
@@ -292,6 +484,14 @@ class TvPlayerManager private constructor(private val context: Context) {
         return if (pos > 0) pos else 0L
     }
 
+    /**
+     * Get buffering duration in milliseconds.
+     */
+    fun getBufferingDurationMs(): Long {
+        if (bufferingStartTime == 0L) return 0L
+        return System.currentTimeMillis() - bufferingStartTime
+    }
+
     private fun prepareCurrentMediaItem(player: ExoPlayer, startPositionMs: Long) {
         val url = activeUrl ?: return
         try {
@@ -311,6 +511,7 @@ class TvPlayerManager private constructor(private val context: Context) {
             val url = activeUrl
             activeUrl = null
             cancelRecovery()
+            cancelBufferingTimeout()
             notifyError("Playback failed after recovery attempts")
             Log.e(TAG, "Recovery exhausted for $url")
             return

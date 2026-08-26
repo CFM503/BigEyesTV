@@ -14,6 +14,45 @@
         app:show_buffering="when_playing"
         app:use_controller="false" />
 
+    <!-- Buffering Indicator Overlay -->
+    <LinearLayout
+        android:id="@+id/bufferingOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#80000000"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <ProgressBar
+            android:id="@+id/bufferingProgressBar"
+            android:layout_width="64dp"
+            android:layout_height="64dp"
+            android:indeterminate="true"
+            android:indeterminateTint="#FFD700" />
+
+        <TextView
+            android:id="@+id/tvBufferingMessage"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="正在缓冲..."
+            android:textColor="#FFFFFF"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvBufferingHint"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="请检查网络连接"
+            android:textColor="#B0FFFFFF"
+            android:textSize="14sp"
+            android:visibility="gone" />
+
+    </LinearLayout>
+
     <!-- Remote Control Playback Overlay (Scheme A: shown on OK click) -->
     <RelativeLayout
         android:id="@+id/playbackOverlay"
@@ -170,36 +209,6 @@
                     android:nextFocusUp="@+id/overlaySeekBar"
                     android:paddingStart="20dp"
                     android:paddingEnd="20dp" />
-
-                <Button
-                    android:id="@+id/btnOverlayRewind"
-                    android:layout_width="wrap_content"
-                    android:layout_height="48dp"
-                    android:layout_marginStart="12dp"
-                    android:background="@drawable/bg_tv_button"
-                    android:text="快退 15s"
-                    android:textColor="@color/white"
-                    android:textSize="15sp"
-                    android:focusable="true"
-                    android:focusableInTouchMode="true"
-                    android:nextFocusUp="@+id/overlaySeekBar"
-                    android:paddingStart="16dp"
-                    android:paddingEnd="16dp" />
-
-                <Button
-                    android:id="@+id/btnOverlayForward"
-                    android:layout_width="wrap_content"
-                    android:layout_height="48dp"
-                    android:layout_marginStart="12dp"
-                    android:background="@drawable/bg_tv_button"
-                    android:text="快进 15s"
-                    android:textColor="@color/white"
-                    android:textSize="15sp"
-                    android:focusable="true"
-                    android:focusableInTouchMode="true"
-                    android:nextFocusUp="@+id/overlaySeekBar"
-                    android:paddingStart="16dp"
-                    android:paddingEnd="16dp" />
 
                 <Button
                     android:id="@+id/btnOverlayNextEpisode"

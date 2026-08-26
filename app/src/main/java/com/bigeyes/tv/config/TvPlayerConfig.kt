@@ -17,6 +17,26 @@ object TvPlayerConfig {
     }
 
     /**
+     * Buffering and network interruption handling configuration.
+     */
+    object Buffering {
+        /** Show buffering indicator delay (ms) - avoid flickering for short buffers */
+        const val SHOW_INDICATOR_DELAY_MS = 500L
+
+        /** Buffering timeout before showing retry dialog (ms) - 30 seconds */
+        const val TIMEOUT_MS = 30_000L
+
+        /** Auto-retry interval when network is recovering (ms) */
+        const val AUTO_RETRY_INTERVAL_MS = 2_000L
+
+        /** Max auto-retry attempts before showing dialog */
+        const val MAX_AUTO_RETRIES = 3
+
+        /** Buffering progress update interval (ms) */
+        const val PROGRESS_UPDATE_INTERVAL_MS = 1000L
+    }
+
+    /**
      * 控制面板与定时器配置
      */
     object Overlay {
