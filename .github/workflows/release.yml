@@ -3,7 +3,6 @@ name: Build and Publish Release APK
 on:
   push:
     tags:
-      - 'bigeyes-tv-v*'
       - 'v*'
   workflow_dispatch:
 
