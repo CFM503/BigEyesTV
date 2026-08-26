@@ -39,6 +39,7 @@ class TvPlayerManager private constructor(private val context: Context) {
     private var lastKnownPositionMs = 0L
     private var recoveryAttempts = 0
     private var recoveryRunnable: Runnable? = null
+    private var resumePlaybackOnFirstFrame = false
 
     init {
         mainHandler.post {
@@ -50,6 +51,13 @@ class TvPlayerManager private constructor(private val context: Context) {
         if (exoPlayer != null) return
         val player = ExoPlayer.Builder(context).build()
         player.addListener(object : Player.Listener {
+            override fun onRenderedFirstFrame() {
+                if (resumePlaybackOnFirstFrame) {
+                    resumePlaybackOnFirstFrame = false
+                    player.playWhenReady = true
+                }
+            }
+
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_READY || playbackState == Player.STATE_BUFFERING) {
                     val position = exoPlayer?.currentPosition ?: 0L
@@ -110,6 +118,20 @@ class TvPlayerManager private constructor(private val context: Context) {
         runOnMain {
             initPlayerOnMainThread()
             playerView.player = exoPlayer
+            val player = exoPlayer ?: return@runOnMain
+            if (player.currentTimeline.isEmpty) {
+                activeUrl?.let { url ->
+                    lastKnownPositionMs = if (lastKnownPositionMs > 0L) {
+                        lastKnownPositionMs
+                    } else {
+                        player.currentPosition.coerceAtLeast(0L)
+                    }
+                    prepareCurrentMediaItem(player, lastKnownPositionMs)
+                }
+            } else if (!player.isPlaying) {
+                resumePlaybackOnFirstFrame = true
+                player.seekTo(player.currentPosition.coerceAtLeast(0L))
+            }
         }
     }
 
