@@ -194,7 +194,7 @@ class DlnaActionHandler(
             }
             soapAction.contains("Previous") || body.contains("<u:Previous") || body.contains("<Previous") -> {
                 Log.i(TAG, "DLNA Previous action received")
-                playerManager.seekTo(0L)
+                playerManager.playPrevious()
                 buildSoapResponse("PreviousResponse", "urn:schemas-upnp-org:service:AVTransport:1", "")
             }
             soapAction.contains("GetPositionInfo") || body.contains("GetPositionInfo") -> {

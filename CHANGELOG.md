@@ -2,6 +2,40 @@
 
 本文档记录 `BigEyes-TV` 的所有版本迭代与变更历史。
 
+## [v1.1.0] - 2026-09-07 (TV 视频播放引擎 + Episode Queue + 遥控器架构重构)
+
+### 🌟 核心架构升级
+* **分层播放架构**:
+  - `PlaybackController` ↔ `EpisodeQueue` ↔ `PlayerEngine` (ExoPlayerEngine)，解耦播放逻辑与界面展现；
+  - UI 采用 Kotlin Coroutines `StateFlow<PlaybackSession>` 单向数据流驱动，彻底消灭界面猜测播放状态。
+* **剧集队列 (Episode Queue)**:
+  - 引入统一 `Episode` 与 `EpisodeQueue` 数据模型，支持单集兼容模式与多集连续播放；
+  - 支持动态流地址刷新 (`updateEpisodeUrl`)，无惧 CDN 临时/过期 Token。
+* **自动下一集与 10 秒倒计时**:
+  - 播放器收到 completion 统一交由 `PlaybackController.onPlaybackCompleted()`；
+  - 剩余 10 秒悬浮显示下一集倒计时卡片，用户可一键直达或取消倒计时；
+  - 全剧播完显示“全剧播放完毕”面板，支持重新播放与退出；连播关闭时显示“播放结束”。
+* **防重复 completion 与切集防抖 (Race Condition Mutex)**:
+  - 引入 `CompletionGuard`，基于递增世代计数器 (generationId) 与防抖机制，杜绝播放器重复上报 completion 导致的跨集乱跳；
+  - 引入 `isSwitchingEpisode` 原子互斥锁，拦截连续快速按 Next / Previous 造成的竞态跳集。
+* **集中式遥控器派发 (TvRemoteController)**:
+  - 彻底解耦 Activity 中的散乱按键判断；
+  - `MEDIA_NEXT` 真正触发 `EpisodeQueue.next()`，`MEDIA_PREVIOUS` 触发 `EpisodeQueue.previous()`；
+  - D-pad 方向键提供明显的焦点反馈与顺畅的选集操作。
+* **选集浮层 (EpisodeListDialog)**:
+  - 新增选集交互弹窗，网格直观展现所有剧集，当前集高亮显示，遥控器上下左右流畅导航与直切。
+* **BigEyes Intent 标准合同 (PlaybackIntentContract)**:
+  - 统一定义 `ACTION_PLAY`, `ACTION_PLAY_QUEUE`, `ACTION_NEXT`, `ACTION_PREVIOUS`, `ACTION_PAUSE`, `ACTION_RESUME`, `ACTION_STOP`, `ACTION_SEEK`；
+  - 兼容仅传单个 URL 的旧接口；防崩溃防御性参数校验。
+* **播放历史与自动续播 (PlaybackHistoryRepository)**:
+  - 每次切集与退出自动保存播放位置；
+  - 30 秒完播法则：剩余不足 30 秒自动判定为已看完并从头开始，否则自动续播。
+* **全面向下兼容**:
+  - `TvPlayerManager` 重构为外观适配器，保留既有全部对外接口与监听器；
+  - DLNA 与 AirPlay 接入统一播放状态机与命令派发总线。
+
+---
+
 ## [v1.0.11] - 2026-08-26 (网络卡顿智能恢复与缓冲状态可视)
 
 ### 🌟 新增与改进特性

@@ -45,6 +45,27 @@
                 <category android:name="android.intent.category.LAUNCHER" />
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="com.bigeyes.tv.action.PLAY" />
+                <action android:name="com.bigeyes.tv.action.PLAY_QUEUE" />
+                <action android:name="com.bigeyes.tv.action.NEXT" />
+                <action android:name="com.bigeyes.tv.action.PREVIOUS" />
+                <action android:name="com.bigeyes.tv.action.PAUSE" />
+                <action android:name="com.bigeyes.tv.action.RESUME" />
+                <action android:name="com.bigeyes.tv.action.STOP" />
+                <action android:name="com.bigeyes.tv.action.SEEK" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="http" />
+                <data android:scheme="https" />
+                <data android:mimeType="video/*" />
+                <data android:mimeType="application/vnd.apple.mpegurl" />
+                <data android:mimeType="application/x-mpegURL" />
+            </intent-filter>
         </activity>
 
         <service

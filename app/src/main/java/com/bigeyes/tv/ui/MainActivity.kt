@@ -1,6 +1,7 @@
 package com.bigeyes.tv.ui
 
 import android.app.ProgressDialog
+import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
 import android.os.Handler
@@ -14,43 +15,49 @@ import android.widget.SeekBar
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.bigeyes.tv.config.TvPlayerConfig
 import com.bigeyes.tv.databinding.ActivityMainBinding
-import com.bigeyes.tv.player.PlayerState
-import com.bigeyes.tv.player.TvPlayerListener
-import com.bigeyes.tv.player.TvPlayerManager
+import com.bigeyes.tv.player.command.PlaybackCommand
+import com.bigeyes.tv.player.contract.PlaybackIntentContract
+import com.bigeyes.tv.player.controller.PlaybackController
+import com.bigeyes.tv.player.model.PlaybackSession
+import com.bigeyes.tv.player.model.PlaybackState
+import com.bigeyes.tv.player.remote.TvRemoteController
 import com.bigeyes.tv.service.TvReceiverService
+import com.bigeyes.tv.ui.dialog.EpisodeListDialog
 import com.bigeyes.tv.update.ReleaseInfo
 import com.bigeyes.tv.update.UpdateManager
 import com.bigeyes.tv.utils.DeviceIdManager
 import com.bigeyes.tv.utils.NetworkUtils
+import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-class MainActivity : AppCompatActivity(), TvPlayerListener {
+class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
 
     private lateinit var binding: ActivityMainBinding
-    private lateinit var playerManager: TvPlayerManager
+    private lateinit var controller: PlaybackController
+    private lateinit var remoteController: TvRemoteController
     private lateinit var deviceIdManager: DeviceIdManager
     private lateinit var updateManager: UpdateManager
 
     private var updateDialog: AlertDialog? = null
     private var downloadProgressDialog: ProgressDialog? = null
     private var exitConfirmDialog: AlertDialog? = null
-    private var networkInterruptedDialog: AlertDialog? = null
+    private var episodeListDialog: EpisodeListDialog? = null
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var hideOverlayRunnable: Runnable? = null
-    private var progressUpdateRunnable: Runnable? = null
 
     // Holding speed (Long-press Left 0.5x / Right 3.0x)
     private var isHoldingSpeed = false
-    private var pendingSpeedHoldRunnable: Runnable? = null
 
-    // Scrubbing (Seekbar sliding like a mouse with real-time time preview)
+    // Scrubbing (Seekbar sliding like a mouse with real-time preview)
     private var isScrubbing = false
     private var scrubOriginMs = 0L
     private var scrubTargetMs = 0L
@@ -68,20 +75,41 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
         setContentView(binding.root)
 
         deviceIdManager = DeviceIdManager.getInstance(this)
-        playerManager = TvPlayerManager.getInstance(this)
+        controller = PlaybackController.getInstance(this)
+        remoteController = TvRemoteController(controller, this)
         updateManager = UpdateManager(this)
 
         updateDeviceInfo()
         setupOverlayControls()
-
-        playerManager.addListener(this)
-        playerManager.attachPlayerView(binding.playerView)
+        setupEndAndErrorControls()
+        observePlaybackSession()
 
         // Start background receiver service (AirPlay & DLNA)
         TvReceiverService.start(this)
 
+        // Handle initial intent
+        handleIncomingIntent(intent)
+
         // Check for updates asynchronously
         checkAppUpdate()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncomingIntent(intent)
+    }
+
+    private fun handleIncomingIntent(incomingIntent: Intent?) {
+        if (incomingIntent == null) return
+        val command = PlaybackIntentContract.parseCommand(incomingIntent)
+        if (command != null) {
+            Log.i(TAG, "Executing intent command: $command")
+            controller.dispatch(command)
+        } else if (incomingIntent.action?.startsWith("com.bigeyes.tv.action") == true) {
+            Log.w(TAG, "Unrecognized or invalid BigEyesTV action: ${incomingIntent.action}")
+            Toast.makeText(this, "无效的播放请求参数", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun updateDeviceInfo() {
@@ -93,80 +121,126 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
         binding.tvVersion.text = "当前版本：v$version"
     }
 
-    private fun checkAppUpdate() {
-        updateManager.checkForUpdates(object : UpdateManager.UpdateCheckListener {
-            override fun onUpdateAvailable(release: ReleaseInfo) {
-                if (isFinishing || isDestroyed) return
-                showUpdateDialog(release)
+    private fun observePlaybackSession() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                controller.session.collect { session ->
+                    renderSessionState(session)
+                }
             }
-
-            override fun onNoUpdateAvailable() {
-                Log.d(TAG, "Already up to date.")
-            }
-
-            override fun onError(error: String) {
-                Log.w(TAG, "Update check skipped/failed: $error")
-            }
-        })
-    }
-
-    private fun showUpdateDialog(release: ReleaseInfo) {
-        val sizeText = if (release.apkSize > 0) {
-            String.format(" (%.1f MB)", release.apkSize / (1024.0 * 1024.0))
-        } else ""
-
-        val notes = if (release.releaseNotes.isNotBlank()) {
-            "\n\n更新说明：\n${release.releaseNotes}"
-        } else ""
-
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("发现新版本 ${release.tagName}$sizeText")
-            .setMessage("检测到 BigEyes-TV 有可用新版本，是否立即下载更新？$notes")
-            .setCancelable(true)
-            .setPositiveButton("立即更新") { _, _ ->
-                startDownloadApk(release)
-            }
-            .setNegativeButton("稍后提醒") { dialogInterface, _ ->
-                dialogInterface.dismiss()
-            }
-            .create()
-
-        updateDialog = dialog
-        dialog.show()
-
-        // Focus positive button for TV remote control
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.requestFocus()
-    }
-
-    private fun startDownloadApk(release: ReleaseInfo) {
-        @Suppress("DEPRECATION")
-        val progressDialog = ProgressDialog(this).apply {
-            setTitle("正在下载更新")
-            setMessage("正在从 GitHub 下载 ${release.apkFileName}...")
-            setProgressStyle(ProgressDialog.STYLE_HORIZONTAL)
-            max = 100
-            progress = 0
-            setCancelable(false)
-            show()
         }
-        downloadProgressDialog = progressDialog
+    }
 
-        updateManager.downloadApk(release, object : UpdateManager.DownloadListener {
-            override fun onProgress(percent: Int, downloadedBytes: Long, totalBytes: Long) {
-                progressDialog.progress = percent
-            }
+    private fun renderSessionState(session: PlaybackSession) {
+        // 1. Update Title and Clock
+        val ep = session.currentEpisode
+        binding.tvOverlayTitle.text = ep?.toDisplayTitle() ?: if (!session.isIdle) "正在播放" else "大屏播放器"
+        updateOverlayClock()
 
-            override fun onDownloadComplete(file: File) {
-                progressDialog.dismiss()
-                Toast.makeText(this@MainActivity, "下载完成，正在调起安装器...", Toast.LENGTH_SHORT).show()
-                updateManager.installApk(this@MainActivity, file)
-            }
+        // 2. Play/Pause Button
+        binding.btnOverlayPlayPause.text = if (session.isPlaying) "暂停" else "播放"
 
-            override fun onDownloadError(error: String) {
-                progressDialog.dismiss()
-                Toast.makeText(this@MainActivity, "下载失败: $error", Toast.LENGTH_LONG).show()
+        // 3. Next / Previous / Episode List visibility & status
+        val queue = controller.episodeQueue
+        binding.btnOverlayPrevEpisode.visibility = if (queue.hasPrevious()) View.VISIBLE else View.GONE
+        binding.btnOverlayNextEpisode.visibility = if (queue.hasNext()) View.VISIBLE else View.GONE
+        binding.btnOverlayEpisodeList.visibility = if (queue.size > 1) View.VISIBLE else View.GONE
+        binding.btnOverlayAutoPlay.text = if (session.autoPlayNext) "连播: 开" else "连播: 关"
+        binding.btnOverlayAutoPlay.setTextColor(if (session.autoPlayNext) Color.parseColor("#FFD700") else Color.WHITE)
+
+        // 4. Speed
+        val speedText = String.format(Locale.US, "%.2fx", session.speed)
+        binding.btnOverlaySpeed.text = "倍速 $speedText"
+
+        // 5. Progress updates (when not actively scrubbing)
+        if (!isScrubbing) {
+            updateProgressUi(session.position, session.duration)
+        }
+
+        // 6. 10-Second Auto Next Countdown Card
+        if (session.hasCountdown) {
+            val nextEp = queue.peekNext()
+            val epNumber = nextEp?.episodeNumber ?: (session.currentIndex + 2)
+            binding.tvCountdownMessage.text = "即将播放下一集：第 ${epNumber} 集 (${session.countdownRemainingSeconds}s)"
+            binding.layoutCountdownCard.visibility = View.VISIBLE
+        } else {
+            binding.layoutCountdownCard.visibility = View.GONE
+        }
+
+        // 7. State Transitions
+        when (session.playbackState) {
+            PlaybackState.PLAYING, PlaybackState.PAUSED, PlaybackState.BUFFERING, PlaybackState.LOADING -> {
+                showPlayer()
+                binding.layoutPlaybackEnd.visibility = View.GONE
+                binding.layoutPlaybackError.visibility = View.GONE
+
+                if (session.playbackState == PlaybackState.BUFFERING || session.playbackState == PlaybackState.LOADING) {
+                    binding.bufferingOverlay.visibility = View.VISIBLE
+                    binding.tvBufferingMessage.text = if (session.playbackState == PlaybackState.LOADING) "正在加载视频..." else "正在缓冲..."
+                } else {
+                    binding.bufferingOverlay.visibility = View.GONE
+                }
             }
-        })
+            PlaybackState.COMPLETED -> {
+                hideOverlay()
+                binding.bufferingOverlay.visibility = View.GONE
+                binding.layoutCountdownCard.visibility = View.GONE
+
+                binding.layoutPlaybackEnd.visibility = View.VISIBLE
+                binding.layoutPlaybackError.visibility = View.GONE
+
+                if (session.isLastEpisode) {
+                    binding.tvEndTitle.text = "全剧播放完毕"
+                    binding.tvEndSubtitle.text = "所有剧集已播放结束"
+                    binding.btnEndNextEpisode.visibility = View.GONE
+                    binding.btnEndReplay.requestFocus()
+                } else {
+                    binding.tvEndTitle.text = "播放结束"
+                    binding.tvEndSubtitle.text = "当前集已播放完毕"
+                    binding.btnEndNextEpisode.visibility = View.VISIBLE
+                    binding.btnEndNextEpisode.requestFocus()
+                }
+            }
+            PlaybackState.ERROR -> {
+                hideOverlay()
+                binding.bufferingOverlay.visibility = View.GONE
+                binding.layoutCountdownCard.visibility = View.GONE
+
+                binding.layoutPlaybackError.visibility = View.VISIBLE
+                binding.layoutPlaybackEnd.visibility = View.GONE
+
+                val epNum = session.currentEpisode?.episodeNumber ?: (session.currentIndex + 1)
+                binding.tvErrorTitle.text = "第 ${epNum} 集播放失败"
+                binding.tvErrorMessage.text = session.errorMessage ?: "视频地址加载失败，请重试"
+
+                binding.btnErrorPrevious.visibility = if (queue.hasPrevious()) View.VISIBLE else View.GONE
+                binding.btnErrorNext.visibility = if (queue.hasNext()) View.VISIBLE else View.GONE
+                binding.btnErrorRetry.requestFocus()
+            }
+            PlaybackState.IDLE, PlaybackState.STOPPED -> {
+                hideOverlay()
+                binding.bufferingOverlay.visibility = View.GONE
+                binding.layoutCountdownCard.visibility = View.GONE
+                binding.layoutPlaybackEnd.visibility = View.GONE
+                binding.layoutPlaybackError.visibility = View.GONE
+                showStandby()
+            }
+        }
+    }
+
+    private fun updateProgressUi(currentMs: Long, durationMs: Long) {
+        val curSec = currentMs / 1000
+        val durSec = durationMs / 1000
+
+        binding.tvOverlayCurrentTime.text = formatSecondsToTime(curSec)
+        binding.tvOverlayTotalTime.text = formatSecondsToTime(durSec)
+
+        if (durSec > 0) {
+            val progress = ((curSec.toFloat() / durSec.toFloat()) * 1000).toInt()
+            binding.overlaySeekBar.progress = progress.coerceIn(0, 1000)
+        } else {
+            binding.overlaySeekBar.progress = 0
+        }
     }
 
     private fun setupOverlayControls() {
@@ -208,7 +282,7 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
         binding.overlaySeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 if (fromUser) {
-                    val duration = playerManager.getDurationMs()
+                    val duration = controller.playerEngine.getDurationMs()
                     if (duration > 0) {
                         val targetMs = (progress.toFloat() / 1000f * duration).toLong()
                         binding.tvOverlayCurrentTime.text = formatSecondsToTime(targetMs / 1000)
@@ -221,28 +295,38 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
             }
 
             override fun onStopTrackingTouch(seekBar: SeekBar?) {
-                val duration = playerManager.getDurationMs()
+                val duration = controller.playerEngine.getDurationMs()
                 if (duration > 0 && seekBar != null) {
                     val targetMs = (seekBar.progress.toFloat() / 1000f * duration).toLong()
-                    playerManager.seekTo(targetMs)
+                    controller.dispatch(PlaybackCommand.Seek(targetMs))
                 }
                 resetOverlayHideTimer()
             }
         })
 
         binding.btnOverlayPlayPause.setOnClickListener {
-            playerManager.togglePlayPause()
-            updateOverlayPlayPauseButton()
+            controller.dispatch(PlaybackCommand.TogglePlayPause)
+            resetOverlayHideTimer()
+        }
+
+        binding.btnOverlayPrevEpisode.setOnClickListener {
+            controller.dispatch(PlaybackCommand.Previous)
             resetOverlayHideTimer()
         }
 
         binding.btnOverlayNextEpisode.setOnClickListener {
-            val played = playerManager.playNext()
-            if (played) {
-                Toast.makeText(this, "正在为您播放下一集...", Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(this, "暂无下一集预加载地址，可在手机端点击下一集", Toast.LENGTH_SHORT).show()
-            }
+            controller.dispatch(PlaybackCommand.Next)
+            resetOverlayHideTimer()
+        }
+
+        binding.btnOverlayEpisodeList.setOnClickListener {
+            showEpisodeListDialog()
+        }
+
+        binding.btnOverlayAutoPlay.setOnClickListener {
+            val newAuto = !controller.session.value.autoPlayNext
+            controller.dispatch(PlaybackCommand.SetAutoPlayNext(newAuto))
+            Toast.makeText(this, if (newAuto) "已开启自动播放下一集" else "已关闭自动播放下一集", Toast.LENGTH_SHORT).show()
             resetOverlayHideTimer()
         }
 
@@ -250,8 +334,7 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
             val speedOptions = TvPlayerConfig.PlaybackOptions.SPEED_OPTIONS
             currentSpeedIndex = (currentSpeedIndex + 1) % speedOptions.size
             val newSpeed = speedOptions[currentSpeedIndex]
-            playerManager.setPlaybackSpeed(newSpeed)
-            binding.btnOverlaySpeed.text = "倍速 ${newSpeed}x"
+            controller.dispatch(PlaybackCommand.SetSpeed(newSpeed))
             Toast.makeText(this, "已切换为 ${newSpeed}x 倍速", Toast.LENGTH_SHORT).show()
             resetOverlayHideTimer()
         }
@@ -269,30 +352,154 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
         }
 
         binding.btnOverlayExit.setOnClickListener {
-            showExitPlaybackConfirmDialog()
+            showExitConfirmDialog()
+        }
+
+        // Countdown Card Buttons
+        binding.btnCountdownPlayNow.setOnClickListener {
+            controller.dispatch(PlaybackCommand.Next)
+        }
+
+        binding.btnCountdownCancel.setOnClickListener {
+            cancelCountdown()
         }
     }
 
-    /**
-     * Start or update sliding on SeekBar like a mouse, displaying real-time time preview
-     */
-    private fun startOrUpdateScrub(isForward: Boolean, repeatCount: Int) {
-        val durationMs = playerManager.getDurationMs()
+    private fun setupEndAndErrorControls() {
+        // End overlay buttons
+        binding.btnEndReplay.setOnClickListener {
+            controller.dispatch(PlaybackCommand.PlayEpisode(controller.episodeQueue.currentIndex, 0L))
+        }
+
+        binding.btnEndNextEpisode.setOnClickListener {
+            controller.dispatch(PlaybackCommand.Next)
+        }
+
+        binding.btnEndEpisodeList.setOnClickListener {
+            showEpisodeListDialog()
+        }
+
+        binding.btnEndExit.setOnClickListener {
+            controller.dispatch(PlaybackCommand.Stop)
+        }
+
+        // Error overlay buttons
+        binding.btnErrorRetry.setOnClickListener {
+            controller.dispatch(PlaybackCommand.Retry)
+        }
+
+        binding.btnErrorPrevious.setOnClickListener {
+            controller.dispatch(PlaybackCommand.Previous)
+        }
+
+        binding.btnErrorNext.setOnClickListener {
+            controller.dispatch(PlaybackCommand.Next)
+        }
+
+        binding.btnErrorExit.setOnClickListener {
+            controller.dispatch(PlaybackCommand.Stop)
+        }
+    }
+
+    private fun showEpisodeListDialog() {
+        if (episodeListDialog?.isShowing == true) return
+        val dialog = EpisodeListDialog(this, controller)
+        episodeListDialog = dialog
+        dialog.show()
+    }
+
+    // ==================== RemoteCallback Implementation ====================
+
+    override fun isOverlayVisible(): Boolean = binding.playbackOverlay.visibility == View.VISIBLE
+
+    override fun showOverlay(focusOnSeekBar: Boolean) {
+        if (binding.playerView.visibility != View.VISIBLE) return
+        binding.playbackOverlay.visibility = View.VISIBLE
+        updateOverlayClock()
+
+        if (focusOnSeekBar) {
+            binding.overlaySeekBar.requestFocus()
+        } else {
+            binding.btnOverlayPlayPause.requestFocus()
+        }
+        resetOverlayHideTimer()
+    }
+
+    override fun hideOverlay() {
+        cancelScrub()
+        binding.playbackOverlay.visibility = View.GONE
+        hideOverlayRunnable?.let { mainHandler.removeCallbacks(it) }
+    }
+
+    override fun isDialogShowing(): Boolean {
+        return exitConfirmDialog?.isShowing == true ||
+                episodeListDialog?.isShowing == true ||
+                updateDialog?.isShowing == true
+    }
+
+    override fun showExitConfirmDialog() {
+        if (exitConfirmDialog?.isShowing == true) return
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("退出投屏播放")
+            .setMessage("确定要结束当前视频播放并返回主页吗？")
+            .setCancelable(true)
+            .setPositiveButton("确认退出") { _, _ ->
+                controller.dispatch(PlaybackCommand.Stop)
+            }
+            .setNegativeButton("继续播放") { dialogInterface, _ ->
+                dialogInterface.dismiss()
+            }
+            .setOnDismissListener {
+                exitConfirmDialog = null
+            }
+            .create()
+
+        exitConfirmDialog = dialog
+        dialog.show()
+
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.apply {
+            isFocusable = true
+            isFocusableInTouchMode = true
+            requestFocus()
+        }
+    }
+
+    override fun isHoldingSpeed(): Boolean = isHoldingSpeed
+
+    override fun activateHoldingSpeed(speed: Float, hudText: String) {
+        if (binding.playerView.visibility != View.VISIBLE) return
+        isHoldingSpeed = true
+        controller.dispatch(PlaybackCommand.SetSpeed(speed))
+        binding.tvSpeedHudText.text = hudText
+        binding.speedHudLayout.visibility = View.VISIBLE
+    }
+
+    override fun deactivateHoldingSpeed() {
+        if (!isHoldingSpeed) return
+        isHoldingSpeed = false
+        val normalSpeed = TvPlayerConfig.PlaybackOptions.SPEED_OPTIONS[currentSpeedIndex]
+        controller.dispatch(PlaybackCommand.SetSpeed(normalSpeed))
+        binding.speedHudLayout.visibility = View.GONE
+    }
+
+    override fun isScrubbing(): Boolean = isScrubbing
+
+    override fun startOrUpdateScrub(isForward: Boolean, repeatCount: Int) {
+        val durationMs = controller.playerEngine.getDurationMs()
         if (durationMs <= 0) return
 
-        // Cancel any pending debounce commit
         commitScrubRunnable?.let { mainHandler.removeCallbacks(it) }
         commitScrubRunnable = null
 
         val now = System.currentTimeMillis()
         if (!isScrubbing) {
             isScrubbing = true
-            scrubOriginMs = playerManager.getCurrentPositionMs()
+            scrubOriginMs = controller.playerEngine.getCurrentPositionMs()
             scrubTargetMs = scrubOriginMs
             scrubHoldStartTime = now
         }
 
-        // Stepped acceleration algorithm based on hold time
         val holdDuration = now - scrubHoldStartTime
         val stepMs: Long = when {
             repeatCount == 0 || holdDuration < TvPlayerConfig.Scrubbing.STAGE_1_MAX_HOLD_MS -> TvPlayerConfig.Scrubbing.STAGE_1_STEP_MS
@@ -307,14 +514,10 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
             (scrubTargetMs - stepMs).coerceAtLeast(0L)
         }
 
-        // Update SeekBar position visually (like dragging with a mouse)
         val progress = ((scrubTargetMs.toFloat() / durationMs.toFloat()) * 1000).toInt()
         binding.overlaySeekBar.progress = progress.coerceIn(0, 1000)
 
-        // Update current time label
         binding.tvOverlayCurrentTime.text = formatSecondsToTime(scrubTargetMs / 1000)
-
-        // Update floating preview bubble
         binding.tvScrubPreviewTime.text = formatSecondsToTime(scrubTargetMs / 1000)
         val deltaSec = (scrubTargetMs - scrubOriginMs) / 1000
         val sign = if (deltaSec >= 0) "+" else "-"
@@ -324,19 +527,15 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
         resetOverlayHideTimer()
     }
 
-    /**
-     * Commit the scrubbed target position to ExoPlayer
-     */
-    private fun commitScrub() {
+    override fun commitScrub() {
         commitScrubRunnable?.let { mainHandler.removeCallbacks(it) }
         commitScrubRunnable = null
 
         if (!isScrubbing) return
         isScrubbing = false
 
-        Log.i(TAG, "Committing scrub position to: $scrubTargetMs ms")
-        playerManager.seekTo(scrubTargetMs)
-        updateOverlayProgress(scrubTargetMs)
+        controller.dispatch(PlaybackCommand.Seek(scrubTargetMs))
+        updateProgressUi(scrubTargetMs, controller.playerEngine.getDurationMs())
 
         binding.layoutScrubPreview.animate()
             .alpha(0f)
@@ -350,10 +549,7 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
         resetOverlayHideTimer()
     }
 
-    /**
-     * Cancel scrubbing without seeking
-     */
-    private fun cancelScrub() {
+    override fun cancelScrub() {
         commitScrubRunnable?.let { mainHandler.removeCallbacks(it) }
         commitScrubRunnable = null
 
@@ -361,37 +557,52 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
         isScrubbing = false
 
         binding.layoutScrubPreview.visibility = View.INVISIBLE
-        updateOverlayProgress()
-        Log.i(TAG, "Scrubbing cancelled, restored to origin")
+        updateProgressUi(controller.playerEngine.getCurrentPositionMs(), controller.playerEngine.getDurationMs())
     }
 
-    private fun showOverlay(focusOnSeekBar: Boolean = false) {
-        if (binding.playerView.visibility != View.VISIBLE) return
-        binding.playbackOverlay.visibility = View.VISIBLE
-        syncOverlayControls()
-        updateOverlayHeader()
-        updateOverlayProgress()
+    override fun isSeekBarFocused(): Boolean = binding.overlaySeekBar.hasFocus()
 
-        if (focusOnSeekBar) {
-            binding.overlaySeekBar.requestFocus()
-        } else {
-            // Default focus on Play/Pause button
-            binding.btnOverlayPlayPause.requestFocus()
+    override fun focusSeekBar() {
+        binding.overlaySeekBar.requestFocus()
+    }
+
+    override fun focusButtonBar() {
+        binding.btnOverlayPlayPause.requestFocus()
+    }
+
+    override fun performFocusedClick(): Boolean {
+        val focused = currentFocus
+        if (focused is Button) {
+            focused.performClick()
+            return true
         }
-
-        startProgressUpdates()
-        resetOverlayHideTimer()
+        return false
     }
 
-    private fun hideOverlay() {
-        cancelScrub()
-        binding.playbackOverlay.visibility = View.GONE
-        stopProgressUpdates()
-        hideOverlayRunnable?.let { mainHandler.removeCallbacks(it) }
+    override fun cancelCountdown(): Boolean {
+        if (controller.session.value.hasCountdown) {
+            controller.dispatch(PlaybackCommand.CancelCountdown)
+            binding.layoutCountdownCard.visibility = View.GONE
+            Toast.makeText(this, "已取消自动下一集", Toast.LENGTH_SHORT).show()
+            return true
+        }
+        return false
     }
 
-    private fun isOverlayVisible(): Boolean {
-        return binding.playbackOverlay.visibility == View.VISIBLE
+    // ==================== Remote Key Events Dispatching ====================
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (remoteController.onKeyDown(keyCode, event)) {
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        if (remoteController.onKeyUp(keyCode, event)) {
+            return true
+        }
+        return super.onKeyUp(keyCode, event)
     }
 
     private fun resetOverlayHideTimer() {
@@ -405,69 +616,9 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
         mainHandler.postDelayed(r, TvPlayerConfig.Overlay.AUTO_HIDE_DELAY_MS)
     }
 
-    private fun startProgressUpdates() {
-        stopProgressUpdates()
-        val r = object : Runnable {
-            override fun run() {
-                if (isOverlayVisible()) {
-                    if (!isScrubbing) {
-                        updateOverlayProgress()
-                    }
-                    updateOverlayClock()
-                    mainHandler.postDelayed(this, TvPlayerConfig.Overlay.PROGRESS_UPDATE_INTERVAL_MS)
-                }
-            }
-        }
-        progressUpdateRunnable = r
-        mainHandler.post(r)
-    }
-
-    private fun stopProgressUpdates() {
-        progressUpdateRunnable?.let { mainHandler.removeCallbacks(it) }
-        progressUpdateRunnable = null
-    }
-
-    private fun syncOverlayControls() {
-        updateOverlayPlayPauseButton()
-        val currentSpeed = playerManager.getPlaybackSpeed()
-        val speedIndex = TvPlayerConfig.PlaybackOptions.SPEED_OPTIONS.indexOfFirst { it == currentSpeed }
-        currentSpeedIndex = if (speedIndex >= 0) speedIndex else 0
-        binding.btnOverlaySpeed.text =
-            "倍速 ${TvPlayerConfig.PlaybackOptions.SPEED_OPTIONS[currentSpeedIndex]}x"
-    }
-
-    private fun updateOverlayPlayPauseButton() {
-        val isPlaying = playerManager.isPlaying()
-        binding.btnOverlayPlayPause.text = if (isPlaying) "暂停" else "播放"
-    }
-
-    private fun updateOverlayHeader() {
-        val url = playerManager.currentUrl
-        binding.tvOverlayTitle.text = if (!url.isNullOrBlank()) "正在投屏播放" else "大屏播放器"
-        updateOverlayClock()
-    }
-
     private fun updateOverlayClock() {
         val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
         binding.tvOverlayClock.text = sdf.format(Date())
-    }
-
-    private fun updateOverlayProgress(forcedCurrentMs: Long? = null) {
-        val currentMs = forcedCurrentMs ?: playerManager.getCurrentPositionMs()
-        val durationMs = playerManager.getDurationMs()
-
-        val curSec = currentMs / 1000
-        val durSec = durationMs / 1000
-
-        binding.tvOverlayCurrentTime.text = formatSecondsToTime(curSec)
-        binding.tvOverlayTotalTime.text = formatSecondsToTime(durSec)
-
-        if (durSec > 0) {
-            val progress = ((curSec.toFloat() / durSec.toFloat()) * 1000).toInt()
-            binding.overlaySeekBar.progress = progress.coerceIn(0, 1000)
-        } else {
-            binding.overlaySeekBar.progress = 0
-        }
     }
 
     private fun formatSecondsToTime(totalSeconds: Long): String {
@@ -481,453 +632,124 @@ class MainActivity : AppCompatActivity(), TvPlayerListener {
         }
     }
 
-    private fun activateHoldingSpeed(speed: Float, hudText: String) {
-        if (binding.playerView.visibility != View.VISIBLE) return
-        isHoldingSpeed = true
-        playerManager.setPlaybackSpeed(speed)
-        binding.tvSpeedHudText.text = hudText
-        binding.speedHudLayout.visibility = View.VISIBLE
-        Log.i(TAG, "Holding speed activated: $speed ($hudText)")
-    }
-
-    private fun deactivateHoldingSpeed() {
-        if (!isHoldingSpeed) return
-        isHoldingSpeed = false
-        val normalSpeed = TvPlayerConfig.PlaybackOptions.SPEED_OPTIONS[currentSpeedIndex]
-        playerManager.setPlaybackSpeed(normalSpeed)
-        binding.speedHudLayout.visibility = View.GONE
-        Log.i(TAG, "Holding speed deactivated -> Restored to ${normalSpeed}x")
-    }
-
-    private fun showExitPlaybackConfirmDialog() {
-        if (exitConfirmDialog?.isShowing == true) return
-
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("退出投屏播放")
-            .setMessage("确定要结束当前视频播放并返回主页吗？")
-            .setCancelable(true)
-            .setPositiveButton("确认退出") { _, _ ->
-                playerManager.stop()
-            }
-            .setNegativeButton("继续播放") { dialogInterface, _ ->
-                dialogInterface.dismiss()
-            }
-            .setOnDismissListener {
-                exitConfirmDialog = null
-            }
-            .create()
-
-        exitConfirmDialog = dialog
-        dialog.show()
-
-        // Focus "确认退出" for TV remote control
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.apply {
-            isFocusable = true
-            isFocusableInTouchMode = true
-            requestFocus()
-        }
-    }
-
-    override fun onResume() {
-        super.onResume()
-        updateDeviceInfo()
-        playerManager.attachPlayerView(binding.playerView)
-        updateManager.checkAndResumePendingInstall(this)
-    }
-
-    override fun onDestroy() {
-        exitConfirmDialog?.dismiss()
-        exitConfirmDialog = null
-        networkInterruptedDialog?.dismiss()
-        networkInterruptedDialog = null
-        cancelScrub()
-        deactivateHoldingSpeed()
-        pendingSpeedHoldRunnable?.let { mainHandler.removeCallbacks(it) }
-        pendingSpeedHoldRunnable = null
-        hideOverlay()
-        hideBufferingOverlay()
-        updateDialog?.dismiss()
-        downloadProgressDialog?.dismiss()
-        playerManager.removeListener(this)
-        playerManager.detachPlayerView(binding.playerView)
-        super.onDestroy()
-    }
-
-    /**
-     * D-pad and TV Remote key event handling
-     * - When overlay is hidden:
-     *   - Holding Right: 3.0x speed, release to restore 1.0x normal
-     *   - Holding Left: 0.5x speed, release to restore 1.0x normal
-     *   - Short tap OK / D-pad: Show control overlay (Scheme A)
-     *   - Back key: Show confirmation dialog to exit (Situation B)
-     * - When overlay is visible:
-     *   - If overlaySeekBar is focused: Left/Right to adjust progress, Down to focus button bar, OK to play/pause
-     *   - If bottom buttons are focused: Up to focus overlaySeekBar, Left/Right to navigate buttons, OK to click
-     *   - Back key: Hide overlay only (keep playing)
-     */
-    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        // If exit confirm dialog or network interrupted dialog is currently showing, let it handle keys
-        if (exitConfirmDialog?.isShowing == true || networkInterruptedDialog?.isShowing == true) {
-            return super.onKeyDown(keyCode, event)
-        }
-
-        // If player is currently active/visible
-        if (binding.playerView.visibility == View.VISIBLE) {
-            // When buffering overlay is visible, only allow BACK to exit
-            if (binding.bufferingOverlay.visibility == View.VISIBLE) {
-                if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE) {
-                    Log.i(TAG, "Remote BACK pressed during buffering -> Showing exit confirm dialog")
-                    showExitPlaybackConfirmDialog()
-                    return true
-                }
-                // Ignore other keys during buffering
-                return true
-            }
-
-            if (!isOverlayVisible()) {
-                // When overlay is HIDDEN:
-                // Handle long-press holding on Right (3.0x speed) and Left (0.5x speed)
-                if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
-                    if (event?.repeatCount == 0) {
-                        if (pendingSpeedHoldRunnable == null && !isHoldingSpeed) {
-                            val r = Runnable {
-                                activateHoldingSpeed(
-                                    TvPlayerConfig.HoldingSpeed.FAST_FORWARD_SPEED,
-                                    TvPlayerConfig.HoldingSpeed.HUD_FAST_FORWARD_TEXT
-                                )
-                            }
-                            pendingSpeedHoldRunnable = r
-                            mainHandler.postDelayed(r, TvPlayerConfig.HoldingSpeed.TRIGGER_DELAY_MS)
-                        }
-                    } else if (event != null && event.repeatCount >= 1) {
-                        if (!isHoldingSpeed) {
-                            pendingSpeedHoldRunnable?.let { mainHandler.removeCallbacks(it) }
-                            pendingSpeedHoldRunnable = null
-                            activateHoldingSpeed(
-                                TvPlayerConfig.HoldingSpeed.FAST_FORWARD_SPEED,
-                                TvPlayerConfig.HoldingSpeed.HUD_FAST_FORWARD_TEXT
-                            )
-                        }
-                        return true
-                    }
-                } else if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
-                    if (event?.repeatCount == 0) {
-                        if (pendingSpeedHoldRunnable == null && !isHoldingSpeed) {
-                            val r = Runnable {
-                                activateHoldingSpeed(
-                                    TvPlayerConfig.HoldingSpeed.SLOW_MOTION_SPEED,
-                                    TvPlayerConfig.HoldingSpeed.HUD_SLOW_MOTION_TEXT
-                                )
-                            }
-                            pendingSpeedHoldRunnable = r
-                            mainHandler.postDelayed(r, TvPlayerConfig.HoldingSpeed.TRIGGER_DELAY_MS)
-                        }
-                    } else if (event != null && event.repeatCount >= 1) {
-                        if (!isHoldingSpeed) {
-                            pendingSpeedHoldRunnable?.let { mainHandler.removeCallbacks(it) }
-                            pendingSpeedHoldRunnable = null
-                            activateHoldingSpeed(
-                                TvPlayerConfig.HoldingSpeed.SLOW_MOTION_SPEED,
-                                TvPlayerConfig.HoldingSpeed.HUD_SLOW_MOTION_TEXT
-                            )
-                        }
-                        return true
-                    }
-                }
-
-                when (keyCode) {
-                    KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
-                        Log.i(TAG, "Remote BACK pressed while overlay hidden -> Showing exit confirm dialog")
-                        showExitPlaybackConfirmDialog()
-                        return true
-                    }
-                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
-                    KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_MENU -> {
-                        Log.i(TAG, "Remote key $keyCode pressed -> Showing control overlay")
-                        showOverlay()
-                        return true
-                    }
-                    KeyEvent.KEYCODE_DPAD_UP -> {
-                        Log.i(TAG, "Remote UP pressed -> Showing control overlay with focus on SeekBar")
-                        showOverlay(focusOnSeekBar = true)
-                        return true
-                    }
-                    KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                        // Captured for holding speed; short tap will show overlay in onKeyUp if not held
-                        return true
-                    }
-                    KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
-                        playerManager.togglePlayPause()
-                        showOverlay()
-                        return true
-                    }
-                    KeyEvent.KEYCODE_MEDIA_PLAY -> {
-                        playerManager.resume()
-                        showOverlay()
-                        return true
-                    }
-                    KeyEvent.KEYCODE_MEDIA_PAUSE -> {
-                        playerManager.pause()
-                        showOverlay()
-                        return true
-                    }
-                    KeyEvent.KEYCODE_MEDIA_STOP -> {
-                        playerManager.stop()
-                        return true
-                    }
-                }
-            } else {
-                // When overlay is VISIBLE:
-                resetOverlayHideTimer()
-
-                when (keyCode) {
-                    KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
-                        Log.i(TAG, "Remote BACK pressed while overlay visible -> Hiding overlay only")
-                        hideOverlay()
-                        return true
-                    }
-                }
-
-                // Check if progress bar (SeekBar) is currently focused
-                if (binding.overlaySeekBar.hasFocus()) {
-                    when (keyCode) {
-                        KeyEvent.KEYCODE_DPAD_LEFT -> {
-                            startOrUpdateScrub(isForward = false, repeatCount = event?.repeatCount ?: 0)
-                            return true
-                        }
-                        KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                            startOrUpdateScrub(isForward = true, repeatCount = event?.repeatCount ?: 0)
-                            return true
-                        }
-                        KeyEvent.KEYCODE_DPAD_DOWN -> {
-                            if (isScrubbing) {
-                                commitScrub()
-                            }
-                            binding.btnOverlayPlayPause.requestFocus()
-                            return true
-                        }
-                        KeyEvent.KEYCODE_DPAD_UP -> {
-                            return true
-                        }
-                        KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                            if (isScrubbing) {
-                                commitScrub()
-                            } else {
-                                playerManager.togglePlayPause()
-                                updateOverlayPlayPauseButton()
-                                resetOverlayHideTimer()
-                            }
-                            return true
-                        }
-                        KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
-                            if (isScrubbing) {
-                                cancelScrub()
-                                return true
-                            }
-                            hideOverlay()
-                            return true
-                        }
-                    }
-                } else {
-                    // One of the bottom buttons is focused
-                    when (keyCode) {
-                        KeyEvent.KEYCODE_DPAD_UP -> {
-                            binding.overlaySeekBar.requestFocus()
-                            return true
-                        }
-                        KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                            val focused = currentFocus
-                            if (focused != null && focused is Button) {
-                                Log.i(TAG, "Remote OK clicked on focused button: ${focused.text}")
-                                focused.performClick()
-                                return true
-                            }
-                        }
-                    }
-                }
-
-                // Let DPAD_LEFT, DPAD_RIGHT, DPAD_UP, DPAD_DOWN move focus normally across buttons
-                return super.onKeyDown(keyCode, event)
-            }
-        }
-
-        return super.onKeyDown(keyCode, event)
-    }
-
-    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
-        if (binding.playerView.visibility == View.VISIBLE) {
-            if (isOverlayVisible() && binding.overlaySeekBar.hasFocus()) {
-                if (isScrubbing && (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT || keyCode == KeyEvent.KEYCODE_DPAD_LEFT)) {
-                    commitScrub()
-                    return true
-                }
-            }
-
-            if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT || keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
-                pendingSpeedHoldRunnable?.let { mainHandler.removeCallbacks(it) }
-                pendingSpeedHoldRunnable = null
-
-                if (isHoldingSpeed) {
-                    deactivateHoldingSpeed()
-                    return true
-                } else if (!isOverlayVisible()) {
-                    // Short tap on left/right when overlay is hidden -> show overlay
-                    showOverlay()
-                    return true
-                }
-            }
-        }
-        return super.onKeyUp(keyCode, event)
-    }
-
-    override fun onStateChanged(state: PlayerState) {
-        runOnUiThread {
-            when (state) {
-                PlayerState.READY -> {
-                    showPlayer()
-                    hideBufferingOverlay()
-                }
-                PlayerState.BUFFERING -> {
-                    showPlayer()
-                    // Show buffering overlay only if not already showing (e.g., from onBufferingStateChanged)
-                    if (binding.bufferingOverlay.visibility != View.VISIBLE) {
-                        showBufferingOverlay("正在缓冲...")
-                    }
-                }
-                PlayerState.IDLE, PlayerState.ENDED -> {
-                    deactivateHoldingSpeed()
-                    hideOverlay()
-                    hideBufferingOverlay()
-                    showStandby()
-                }
-                PlayerState.ERROR -> {
-                    deactivateHoldingSpeed()
-                    hideOverlay()
-                    hideBufferingOverlay()
-                    showStandby()
-                }
-            }
-        }
-    }
-
-    override fun onPlaybackStarted(url: String) {
-        runOnUiThread {
-            Log.i(TAG, "Playback started: $url")
-            showPlayer()
-        }
-    }
-
-    override fun onPlaybackStopped() {
-        runOnUiThread {
-            Log.i(TAG, "Playback stopped")
-            deactivateHoldingSpeed()
-            hideOverlay()
-            showStandby()
-        }
-    }
-
-    override fun onError(error: String) {
-        runOnUiThread {
-            Log.e(TAG, "Playback error: $error")
-            deactivateHoldingSpeed()
-            hideOverlay()
-            hideBufferingOverlay()
-            showStandby()
-        }
-    }
-
-    override fun onBufferingStateChanged(isBuffering: Boolean, message: String) {
-        runOnUiThread {
-            if (isBuffering) {
-                showBufferingOverlay(message)
-            } else {
-                hideBufferingOverlay()
-            }
-        }
-    }
-
-    override fun onNetworkRetry(attempt: Int, maxAttempts: Int) {
-        runOnUiThread {
-            val message = "网络不稳定，正在尝试恢复... ($attempt/$maxAttempts)"
-            updateBufferingMessage(message)
-            Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    override fun onNetworkInterrupted(lastPositionMs: Long) {
-        runOnUiThread {
-            showNetworkInterruptedDialog(lastPositionMs)
-        }
-    }
-
-    private fun showBufferingOverlay(message: String) {
-        if (binding.playerView.visibility != View.VISIBLE) return
-        binding.bufferingOverlay.visibility = View.VISIBLE
-        binding.tvBufferingMessage.text = message
-        binding.tvBufferingHint.visibility = View.GONE
-        Log.i(TAG, "Buffering overlay shown: $message")
-    }
-
-    private fun hideBufferingOverlay() {
-        binding.bufferingOverlay.visibility = View.GONE
-    }
-
-    private fun updateBufferingMessage(message: String) {
-        binding.tvBufferingMessage.text = message
-        binding.tvBufferingHint.visibility = View.VISIBLE
-    }
-
-    private fun showNetworkInterruptedDialog(lastPositionMs: Long) {
-        if (networkInterruptedDialog?.isShowing == true) return
-        hideBufferingOverlay()
-
-        val positionText = if (lastPositionMs > 0) {
-            val seconds = lastPositionMs / 1000
-            val minutes = seconds / 60
-            val secs = seconds % 60
-            "\n\n上次播放位置：${minutes}:${String.format("%02d", secs)}"
-        } else ""
-
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("网络连接中断")
-            .setMessage("无法连接到网络，视频播放已暂停。请检查网络连接后重试。$positionText")
-            .setCancelable(false)
-            .setPositiveButton("重新连接") { _, _ ->
-                playerManager.manualRetry()
-            }
-            .setNegativeButton("返回主页") { _, _ ->
-                playerManager.cancelAndReturnToStandby()
-            }
-            .setOnDismissListener {
-                networkInterruptedDialog = null
-            }
-            .create()
-
-        networkInterruptedDialog = dialog
-        dialog.show()
-
-        // Focus "重新连接" for TV remote control
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.apply {
-            isFocusable = true
-            isFocusableInTouchMode = true
-            requestFocus()
-        }
-    }
-
     private fun showPlayer() {
         binding.playerView.visibility = View.VISIBLE
         binding.standbyLayout.visibility = View.GONE
     }
 
     private fun showStandby() {
-        exitConfirmDialog?.dismiss()
-        exitConfirmDialog = null
-        deactivateHoldingSpeed()
-        pendingSpeedHoldRunnable?.let { mainHandler.removeCallbacks(it) }
-        pendingSpeedHoldRunnable = null
         binding.playerView.visibility = View.GONE
         binding.standbyLayout.visibility = View.VISIBLE
         updateDeviceInfo()
+    }
+
+    // ==================== Update Checking ====================
+
+    private fun checkAppUpdate() {
+        updateManager.checkForUpdates(object : UpdateManager.UpdateCheckListener {
+            override fun onUpdateAvailable(release: ReleaseInfo) {
+                if (isFinishing || isDestroyed) return
+                showUpdateDialog(release)
+            }
+
+            override fun onNoUpdateAvailable() {
+                Log.d(TAG, "Already up to date.")
+            }
+
+            override fun onError(error: String) {
+                Log.w(TAG, "Update check skipped/failed: $error")
+            }
+        })
+    }
+
+    private fun showUpdateDialog(release: ReleaseInfo) {
+        val sizeText = if (release.apkSize > 0) {
+            String.format(" (%.1f MB)", release.apkSize / (1024.0 * 1024.0))
+        } else ""
+
+        val notes = if (release.releaseNotes.isNotBlank()) {
+            "\n\n更新说明：\n${release.releaseNotes}"
+        } else ""
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("发现新版本 ${release.tagName}$sizeText")
+            .setMessage("检测到 BigEyes-TV 有可用新版本，是否立即下载更新？$notes")
+            .setCancelable(true)
+            .setPositiveButton("立即更新") { _, _ ->
+                startDownloadApk(release)
+            }
+            .setNegativeButton("稍后提醒") { dialogInterface, _ ->
+                dialogInterface.dismiss()
+            }
+            .create()
+
+        updateDialog = dialog
+        dialog.show()
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.requestFocus()
+    }
+
+    private fun startDownloadApk(release: ReleaseInfo) {
+        @Suppress("DEPRECATION")
+        val progressDialog = ProgressDialog(this).apply {
+            setTitle("正在下载更新")
+            setMessage("正在从 GitHub 下载 ${release.apkFileName}...")
+            setProgressStyle(ProgressDialog.STYLE_HORIZONTAL)
+            max = 100
+            progress = 0
+            setCancelable(false)
+            show()
+        }
+        downloadProgressDialog = progressDialog
+
+        updateManager.downloadApk(release, object : UpdateManager.DownloadListener {
+            override fun onProgress(percent: Int, downloadedBytes: Long, totalBytes: Long) {
+                progressDialog.progress = percent
+            }
+
+            override fun onDownloadComplete(file: File) {
+                progressDialog.dismiss()
+                Toast.makeText(this@MainActivity, "下载完成，正在调起安装器...", Toast.LENGTH_SHORT).show()
+                updateManager.installApk(this@MainActivity, file)
+            }
+
+            override fun onDownloadError(error: String) {
+                progressDialog.dismiss()
+                Toast.makeText(this@MainActivity, "下载失败: $error", Toast.LENGTH_LONG).show()
+            }
+        })
+    }
+
+    // ==================== Lifecycle ====================
+
+    override fun onStart() {
+        super.onStart()
+        controller.attachPlayerView(binding.playerView)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        updateDeviceInfo()
+        updateManager.checkAndResumePendingInstall(this)
+    }
+
+    override fun onStop() {
+        controller.detachPlayerView(binding.playerView)
+        super.onStop()
+    }
+
+    override fun onDestroy() {
+        exitConfirmDialog?.dismiss()
+        exitConfirmDialog = null
+        episodeListDialog?.dismiss()
+        episodeListDialog = null
+        updateDialog?.dismiss()
+        updateDialog = null
+        downloadProgressDialog?.dismiss()
+        downloadProgressDialog = null
+
+        remoteController.cleanup()
+        hideOverlay()
+        super.onDestroy()
     }
 
     companion object {
