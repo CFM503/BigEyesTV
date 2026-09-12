@@ -61,18 +61,35 @@ class DlnaActionHandlerTest {
     @Test
     fun testTransportStateEndedIsStopped() {
         // Simulating the state logic
-        fun resolveState(isPlaying: Boolean, isEnded: Boolean, currentUrl: String?): String {
+        fun resolveState(isPlaying: Boolean, isEnded: Boolean, isIdle: Boolean, isReady: Boolean, currentUrl: String?): String {
             return when {
                 isPlaying -> "PLAYING"
-                isEnded -> "STOPPED"
-                currentUrl != null -> "PAUSED_PLAYBACK"
+                isEnded || isIdle -> "STOPPED"
+                currentUrl != null && isReady -> "PAUSED_PLAYBACK"
                 else -> "STOPPED"
             }
         }
 
-        assertEquals("PLAYING", resolveState(isPlaying = true, isEnded = false, currentUrl = "http://test.com"))
-        assertEquals("PAUSED_PLAYBACK", resolveState(isPlaying = false, isEnded = false, currentUrl = "http://test.com"))
-        assertEquals("STOPPED", resolveState(isPlaying = false, isEnded = true, currentUrl = "http://test.com"))
-        assertEquals("STOPPED", resolveState(isPlaying = false, isEnded = false, currentUrl = null))
+        assertEquals("PLAYING", resolveState(isPlaying = true, isEnded = false, isIdle = false, isReady = true, currentUrl = "http://test.com"))
+        assertEquals("PAUSED_PLAYBACK", resolveState(isPlaying = false, isEnded = false, isIdle = false, isReady = true, currentUrl = "http://test.com"))
+        assertEquals("STOPPED", resolveState(isPlaying = false, isEnded = true, isIdle = false, isReady = false, currentUrl = "http://test.com"))
+        assertEquals("STOPPED", resolveState(isPlaying = false, isEnded = false, isIdle = true, isReady = false, currentUrl = "http://test.com"))
+        assertEquals("STOPPED", resolveState(isPlaying = false, isEnded = false, isIdle = false, isReady = false, currentUrl = null))
+    }
+
+    @Test
+    fun testXmlTagValueExtractionWithNamespace() {
+        fun extractXmlTagValue(xml: String, tagName: String): String? {
+            val regex = Regex("<(?:[a-zA-Z0-9_]+:)?$tagName(?:\\s[^>]*)?>(.*?)</(?:[a-zA-Z0-9_]+:)?$tagName>", RegexOption.DOT_MATCHES_ALL)
+            return regex.find(xml)?.groupValues?.get(1)?.trim()
+        }
+
+        val plainXml = "<CurrentURI>http://example.com/video.mp4</CurrentURI>"
+        val nsXml = "<u:CurrentURI>http://example.com/video.mp4</u:CurrentURI>"
+        val attrXml = "<CurrentURI xmlns:dt=\"string\">http://example.com/video.mp4</CurrentURI>"
+
+        assertEquals("http://example.com/video.mp4", extractXmlTagValue(plainXml, "CurrentURI"))
+        assertEquals("http://example.com/video.mp4", extractXmlTagValue(nsXml, "CurrentURI"))
+        assertEquals("http://example.com/video.mp4", extractXmlTagValue(attrXml, "CurrentURI"))
     }
 }

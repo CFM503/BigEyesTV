@@ -1,6 +1,7 @@
 package com.bigeyes.tv.player
 
 import android.content.Context
+import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -9,6 +10,7 @@ import com.bigeyes.tv.player.command.PlaybackCommand
 import com.bigeyes.tv.player.controller.PlaybackController
 import com.bigeyes.tv.player.model.Episode
 import com.bigeyes.tv.player.model.PlaybackState
+import com.bigeyes.tv.ui.MainActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -103,6 +105,18 @@ class TvPlayerManager private constructor(private val context: Context) {
         Log.i(TAG, "TvPlayerManager.play url=$url, startPositionMs=$startPositionMs")
         currentUrl = url
         controller.dispatch(PlaybackCommand.Play(url, startPositionMs))
+        bringActivityToFront()
+    }
+
+    private fun bringActivityToFront() {
+        try {
+            val intent = Intent(context, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            }
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to bring MainActivity to front: ${e.message}")
+        }
     }
 
     fun pause() {

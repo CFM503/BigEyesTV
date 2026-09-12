@@ -81,6 +81,7 @@ class PlaybackController private constructor(
 
     private fun handlePlay(url: String?, startPositionMs: Long) {
         if (!url.isNullOrBlank()) {
+            isSwitchingEpisode.set(false)
             val singleQueue = listOf(Episode.createSingle(url))
             handlePlayQueue(singleQueue, 0, startPositionMs, autoPlayNext = false)
         } else {
@@ -119,12 +120,18 @@ class PlaybackController private constructor(
         playerEngine.stop()
         completionGuard.reset()
         isSwitchingEpisode.set(false)
+        episodeQueue.clear()
         _session.update {
             it.copy(
                 playbackState = PlaybackState.STOPPED,
                 position = 0L,
                 duration = 0L,
-                countdownRemainingSeconds = null
+                countdownRemainingSeconds = null,
+                currentEpisode = null,
+                seriesId = "",
+                seriesTitle = "",
+                currentIndex = 0,
+                isLastEpisode = true
             )
         }
     }

@@ -85,9 +85,11 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
                     return
                 }
 
-                if (playbackState == Player.STATE_IDLE && activeUrl != null) {
-                    scheduleRecovery()
-                    return
+                if (playbackState == Player.STATE_IDLE) {
+                    if (currentState != PlaybackState.LOADING && currentState != PlaybackState.STOPPED && activeUrl != null && player.playerError != null) {
+                        scheduleRecovery()
+                        return
+                    }
                 }
 
                 val newState = when (playbackState) {
@@ -374,6 +376,8 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
         try {
             currentState = PlaybackState.LOADING
             listener?.onEngineStateChanged(PlaybackState.LOADING)
+            player.stop()
+            player.clearMediaItems()
             player.setMediaItem(MediaItem.fromUri(Uri.parse(url)), startPositionMs)
             player.prepare()
             player.playWhenReady = true

@@ -145,14 +145,12 @@ class DlnaActionHandler(
 
     private fun handleAvTransportControl(session: IHTTPSession): Response {
         val body = extractBodyString(session)
-        val soapAction = session.headers["soapaction"] ?: ""
+        val soapAction = session.headers["soapaction"] ?: session.headers["SOAPAction"] ?: ""
         Log.i(TAG, "DLNA AVTransport SOAPAction: $soapAction")
 
         return when {
             soapAction.contains("SetAVTransportURI") || body.contains("SetAVTransportURI") -> {
-                val uriRegex = Regex("<CurrentURI>(.*?)</CurrentURI>", RegexOption.DOT_MATCHES_ALL)
-                val match = uriRegex.find(body)
-                val streamUrl = match?.groupValues?.get(1)?.trim()?.replace("&amp;", "&") ?: ""
+                val streamUrl = extractXmlTagValue(body, "CurrentURI")?.let { cleanXmlValue(it) }.orEmpty()
                 Log.i(TAG, "DLNA SetAVTransportURI extracted URL: $streamUrl")
                 if (streamUrl.isNotBlank()) {
                     playerManager.play(streamUrl, 0L)
@@ -160,15 +158,19 @@ class DlnaActionHandler(
                 buildSoapResponse("SetAVTransportURIResponse", "urn:schemas-upnp-org:service:AVTransport:1", "")
             }
             soapAction.contains("SetNextAVTransportURI") || body.contains("SetNextAVTransportURI") -> {
-                val uriRegex = Regex("<NextURI>(.*?)</NextURI>", RegexOption.DOT_MATCHES_ALL)
-                val match = uriRegex.find(body)
-                val nextStreamUrl = match?.groupValues?.get(1)?.trim()?.replace("&amp;", "&") ?: ""
+                val nextStreamUrl = extractXmlTagValue(body, "NextURI")?.let { cleanXmlValue(it) }.orEmpty()
                 Log.i(TAG, "DLNA SetNextAVTransportURI extracted URL: $nextStreamUrl")
                 playerManager.setNextUrl(if (nextStreamUrl.isNotBlank()) nextStreamUrl else null)
                 buildSoapResponse("SetNextAVTransportURIResponse", "urn:schemas-upnp-org:service:AVTransport:1", "")
             }
             soapAction.contains("Play") || body.contains("<u:Play") || body.contains("<Play") -> {
-                playerManager.resume()
+                val streamUrl = extractXmlTagValue(body, "CurrentURI")?.let { cleanXmlValue(it) }.orEmpty()
+                if (streamUrl.isNotBlank() && (playerManager.currentState == PlayerState.IDLE || playerManager.currentUrl == null)) {
+                    Log.i(TAG, "DLNA Play containing CurrentURI: $streamUrl")
+                    playerManager.play(streamUrl, 0L)
+                } else {
+                    playerManager.resume()
+                }
                 buildSoapResponse("PlayResponse", "urn:schemas-upnp-org:service:AVTransport:1", "")
             }
             soapAction.contains("Pause") || body.contains("<u:Pause") || body.contains("<Pause") -> {
@@ -176,8 +178,7 @@ class DlnaActionHandler(
                 buildSoapResponse("PauseResponse", "urn:schemas-upnp-org:service:AVTransport:1", "")
             }
             soapAction.contains("Seek") || body.contains("<u:Seek") || body.contains("<Seek") -> {
-                val targetRegex = Regex("<Target>(.*?)</Target>")
-                val targetStr = targetRegex.find(body)?.groupValues?.get(1)?.trim() ?: "00:00:00"
+                val targetStr = extractXmlTagValue(body, "Target")?.let { cleanXmlValue(it) } ?: "00:00:00"
                 val positionMs = parseTimeStringToMs(targetStr)
                 Log.i(TAG, "DLNA Seek to $targetStr ($positionMs ms)")
                 playerManager.seekTo(positionMs)
@@ -202,13 +203,14 @@ class DlnaActionHandler(
                 val posSec = if (playerManager.isEnded() && durationSec > 0) durationSec else playerManager.getCurrentPositionMs() / 1000
                 val durFormatted = formatSecondsToTimeString(durationSec)
                 val posFormatted = formatSecondsToTimeString(posSec)
-                val url = playerManager.currentUrl ?: ""
+                val rawUrl = playerManager.currentUrl ?: ""
+                val escapedUrl = escapeXml(rawUrl)
 
                 val innerXml = """
                     <Track>1</Track>
                     <TrackDuration>$durFormatted</TrackDuration>
                     <TrackMetaData></TrackMetaData>
-                    <TrackURI>$url</TrackURI>
+                    <TrackURI>$escapedUrl</TrackURI>
                     <RelTime>$posFormatted</RelTime>
                     <AbsTime>$posFormatted</AbsTime>
                     <RelCount>2147483647</RelCount>
@@ -219,9 +221,9 @@ class DlnaActionHandler(
             soapAction.contains("GetTransportInfo") || body.contains("GetTransportInfo") -> {
                 val state = when {
                     playerManager.isPlaying() -> "PLAYING"
-                    playerManager.isEnded() -> "STOPPED"
+                    playerManager.isEnded() || playerManager.currentState == PlayerState.IDLE -> "STOPPED"
                     playerManager.currentState == PlayerState.BUFFERING -> "TRANSITIONING"
-                    playerManager.currentUrl != null -> "PAUSED_PLAYBACK"
+                    playerManager.currentUrl != null && (playerManager.currentState == PlayerState.READY || playerManager.isReady()) -> "PAUSED_PLAYBACK"
                     else -> "STOPPED"
                 }
                 val innerXml = """
@@ -259,6 +261,28 @@ class DlnaActionHandler(
         return resp
     }
 
+    private fun extractXmlTagValue(xml: String, tagName: String): String? {
+        val regex = Regex("<(?:[a-zA-Z0-9_]+:)?$tagName(?:\\s[^>]*)?>(.*?)</(?:[a-zA-Z0-9_]+:)?$tagName>", RegexOption.DOT_MATCHES_ALL)
+        return regex.find(xml)?.groupValues?.get(1)?.trim()
+    }
+
+    private fun cleanXmlValue(value: String): String {
+        return value.replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&apos;", "'")
+            .trim()
+    }
+
+    private fun escapeXml(value: String): String {
+        return value.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\"", "&quot;")
+            .replace("'", "&apos;")
+    }
+
     private fun extractBodyString(session: IHTTPSession): String {
         val files = HashMap<String, String>()
         try {
@@ -266,7 +290,7 @@ class DlnaActionHandler(
         } catch (e: Exception) {
             Log.w(TAG, "parseBody error: ${e.message}")
         }
-        val postData = files["postData"]
+        val postData = files["content"] ?: files["postData"]
         if (!postData.isNullOrBlank()) {
             val file = File(postData)
             if (file.exists() && file.isFile) {

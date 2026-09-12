@@ -36,6 +36,7 @@ class TvRemoteController(
         fun focusButtonBar()
         fun performFocusedClick(): Boolean
         fun cancelCountdown(): Boolean
+        fun isPlayerVisible(): Boolean
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -92,6 +93,9 @@ class TvRemoteController(
 
         if (!overlayVisible) {
             // When Overlay is HIDDEN
+            if (!callback.isPlayerVisible()) {
+                return false
+            }
             when (keyCode) {
                 KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
                     if (callback.cancelCountdown()) {
@@ -192,6 +196,9 @@ class TvRemoteController(
 
     fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
         if (callback.isDialogShowing()) {
+            return false
+        }
+        if (!callback.isPlayerVisible() && !callback.isOverlayVisible()) {
             return false
         }
 

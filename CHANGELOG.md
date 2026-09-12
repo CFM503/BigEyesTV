@@ -2,6 +2,25 @@
 
 本文档记录 `BigEyes-TV` 的所有版本迭代与变更历史。
 
+## [v1.1.1] - 2026-09-12 (解决切视频推送失败与首页再推送无法唤起问题)
+
+### 🐛 缺陷修复与稳定性提升
+* **解决切视频推送失败问题 (Cross-Video Collision & State Reset)**:
+  - 修复单集流媒体 `Episode.createSingle` 共用固定 `seriesId` 导致跨视频续播进度撞车、误触播毕完成或定位超出时长的缺陷，采用 URL 哈希生成独立 `seriesId`；
+  - 修复停止播放或切换视频时未清空旧队列与旧剧集信息的缺陷，`handleStop` 彻底重置播放会话；
+  - 修复 DLNA `GetTransportInfo` 在停止或空闲状态误判为 `PAUSED_PLAYBACK` 导致手机端判定设备繁忙而推送失败的问题；
+  - 修复 DLNA 响应 XML 中 `TrackURI` 特殊字符（如 URL 查询参数中的 `&`）未转义导致手机端 XML 解析崩溃报错的问题；
+  - 增强 DLNA SOAP 请求 XML 标签解析，兼容命名空间前缀（如 `<u:CurrentURI>`）与标签属性；
+  - 兼容 NanoHTTPD `files["content"]` 请求体提取，防止小体积 SOAP 请求解析为空。
+* **解决回到首页后再次推送无法唤起应用问题 (App Foregrounding & Dialog Reset)**:
+  - `TvPlayerManager.play` 在接收到手机端投屏请求时，通过 `FLAG_ACTIVITY_NEW_TASK` / `FLAG_ACTIVITY_SINGLE_TOP` 自动唤起并置顶 `MainActivity`；
+  - 进入新视频加载与播放状态时，自动关闭遗留的退出确认弹窗与选集弹窗，立即展示播放界面。
+* **优化播放器切换过渡与遥控器交互**:
+  - ExoPlayer 切换新视频前调用 `stop()` 与 `clearMediaItems()` 彻底清空旧流管线，避免中间状态误触发网络重连恢复循环；
+  - 首页待机状态下禁用视频播放器按键与退出视频确认弹窗拦截，允许遥控器返回键正常操作。
+
+---
+
 ## [v1.1.0] - 2026-09-07 (TV 视频播放引擎 + Episode Queue + 遥控器架构重构)
 
 ### 🌟 核心架构升级

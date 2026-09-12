@@ -170,6 +170,10 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
         // 7. State Transitions
         when (session.playbackState) {
             PlaybackState.PLAYING, PlaybackState.PAUSED, PlaybackState.BUFFERING, PlaybackState.LOADING -> {
+                exitConfirmDialog?.dismiss()
+                exitConfirmDialog = null
+                episodeListDialog?.dismiss()
+                episodeListDialog = null
                 showPlayer()
                 binding.layoutPlaybackEnd.visibility = View.GONE
                 binding.layoutPlaybackError.visibility = View.GONE
@@ -409,6 +413,8 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
     }
 
     // ==================== RemoteCallback Implementation ====================
+
+    override fun isPlayerVisible(): Boolean = binding.playerView.visibility == View.VISIBLE
 
     override fun isOverlayVisible(): Boolean = binding.playbackOverlay.visibility == View.VISIBLE
 

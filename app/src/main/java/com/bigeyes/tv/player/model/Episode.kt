@@ -67,8 +67,9 @@ data class Episode(
 
         fun createSingle(url: String, title: String? = null): Episode {
             val display = if (!title.isNullOrBlank()) title else "投屏流媒体"
+            val id = "stream_" + (url.hashCode().toLong() and 0xFFFFFFFFL).toString(16)
             return Episode(
-                seriesId = "single_media",
+                seriesId = id,
                 seriesTitle = display,
                 seasonNumber = 1,
                 episodeNumber = 1,
