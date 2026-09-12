@@ -86,7 +86,11 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
                 }
 
                 if (playbackState == Player.STATE_IDLE) {
-                    if (currentState != PlaybackState.LOADING && currentState != PlaybackState.STOPPED && activeUrl != null && player.playerError != null) {
+                    if (currentState == PlaybackState.LOADING) {
+                        // Suppress intermediate IDLE state while loading/preparing new media
+                        return
+                    }
+                    if (currentState != PlaybackState.STOPPED && activeUrl != null && player.playerError != null) {
                         scheduleRecovery()
                         return
                     }
@@ -100,15 +104,23 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
                 }
 
                 handleBufferingStateChange(newState)
+                val previousState = currentState
                 currentState = newState
                 listener?.onEngineStateChanged(newState)
+                if (newState == PlaybackState.PLAYING && previousState != PlaybackState.PLAYING) {
+                    activeUrl?.let { listener?.onPlaybackStarted(it) }
+                }
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 if (exoPlayer?.playbackState == Player.STATE_READY) {
                     val newState = if (isPlaying) PlaybackState.PLAYING else PlaybackState.PAUSED
+                    val previousState = currentState
                     currentState = newState
                     listener?.onEngineStateChanged(newState)
+                    if (newState == PlaybackState.PLAYING && previousState != PlaybackState.PLAYING) {
+                        activeUrl?.let { listener?.onPlaybackStarted(it) }
+                    }
                 }
             }
 
@@ -376,12 +388,10 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
         try {
             currentState = PlaybackState.LOADING
             listener?.onEngineStateChanged(PlaybackState.LOADING)
-            player.stop()
-            player.clearMediaItems()
+            // Replace media item directly without stop() to avoid resetting state to IDLE
             player.setMediaItem(MediaItem.fromUri(Uri.parse(url)), startPositionMs)
             player.prepare()
             player.playWhenReady = true
-            listener?.onPlaybackStarted(url)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to prepare playback for $url", e)
             notifyError("Play error: ${e.message}")

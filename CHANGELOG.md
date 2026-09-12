@@ -2,6 +2,25 @@
 
 本文档记录 `BigEyes-TV` 的所有版本迭代与变更历史。
 
+## [v1.1.2] - 2026-09-12 (解决视频播放中再次推送新视频失败与无法切片问题)
+
+### 🐛 缺陷修复与流媒体推送链路强化
+* **解决正在播放时推送新视频电视端无响应问题 (DLNA Body Extraction & Permission Bypass)**:
+  - 根因：NanoHTTPD 的 `session.parseBody` 在请求体超出 1024 字节（携带 `CurrentURIMetaData` DIDL 结构）时会尝试向系统临时目录写入临时文件，而在 Android TV 设备上常规应用无权访问 `/data/local/tmp` 抛出 `Permission denied`，导致 `extractBodyString` 为空；虽然向手机端返回了 `200 OK`，但电视端未真正提取到播放地址而未启动播放；
+  - 修复：根据 `Content-Length` 直接从 `session.inputStream` 读取原始字节流，彻底规避 Android 临时文件权限限制与内存溢出风险，百分之百可靠获取 SOAP XML 请求体；
+  - 增强 XML CDATA 解析：支持自动解包 `<![CDATA[...]]>` 格式的流媒体 URL 与转义字符。
+* **解决 DLNA SOAP 动作路由误匹配与切视频状态恢复 (Action Routing & Metadata Extraction)**:
+  - 修复 `"SetNextAVTransportURI".contains("SetAVTransportURI")` 先验匹配导致的路由拦截问题，优先匹配 `SetNextAVTransportURI`；
+  - 增强 `SetAVTransportURI` 与 `Play` 动作从 `CurrentURIMetaData` 中提取 `dc:title` / `title`，让电视端播放浮层准确展示视频标题；
+  - 消除 `Play` 动作在电视端非空闲状态下忽略新 URL 的限制，收到新视频地址即刻无缝切换播放。
+* **消除 ExoPlayer 切流过程中的状态竞态与闪屏待机 (ExoPlayer State Transition Race)**:
+  - 切换视频时避免强杀播放管线引发的 `Player.STATE_IDLE` 中间态冒泡，在 `PlaybackState.LOADING` 期间压制虚假空闲事件，防止电视界面闪烁跳回待机页面；
+  - 精确化 `onPlaybackStarted` 事件通知时机，在 ExoPlayer 真正达到 `STATE_READY` 且准备就绪时上报，保证界面缓冲与播放状态无缝衔接。
+* **强化播放控制器线程安全 (Main Looper Dispatch Guard)**:
+  - `PlaybackController.dispatch` 强制派发至 Android 主线程 Looper 执行，彻底杜绝 NanoHTTPD 后台网络线程直接操作播放器进度、剧集队列与历史存储所引发的并发冲突。
+
+---
+
 ## [v1.1.1] - 2026-09-12 (解决切视频推送失败与首页再推送无法唤起问题)
 
 ### 🐛 缺陷修复与稳定性提升

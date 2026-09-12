@@ -8,7 +8,11 @@ import com.bigeyes.tv.player.model.Episode
  * single-point-of-truth state transitions.
  */
 sealed class PlaybackCommand {
-    data class Play(val url: String? = null, val startPositionMs: Long = 0L) : PlaybackCommand()
+    data class Play(
+        val url: String? = null,
+        val startPositionMs: Long = 0L,
+        val title: String? = null
+    ) : PlaybackCommand()
     object Pause : PlaybackCommand()
     object Resume : PlaybackCommand()
     object TogglePlayPause : PlaybackCommand()

@@ -51,11 +51,20 @@ class PlaybackController private constructor(
     /**
      * Central instruction dispatch endpoint.
      * All origins (Remote, Intent, DLNA, AirPlay, UI) funnel through here.
+     * Guarantees thread-safe execution on Main Looper.
      */
     fun dispatch(command: PlaybackCommand) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            executeDispatch(command)
+        } else {
+            mainHandler.post { executeDispatch(command) }
+        }
+    }
+
+    private fun executeDispatch(command: PlaybackCommand) {
         Log.i(TAG, "Dispatch command: $command")
         when (command) {
-            is PlaybackCommand.Play -> handlePlay(command.url, command.startPositionMs)
+            is PlaybackCommand.Play -> handlePlay(command.url, command.startPositionMs, command.title)
             is PlaybackCommand.Pause -> handlePause()
             is PlaybackCommand.Resume -> handleResume()
             is PlaybackCommand.TogglePlayPause -> handleTogglePlayPause()
@@ -79,10 +88,10 @@ class PlaybackController private constructor(
         }
     }
 
-    private fun handlePlay(url: String?, startPositionMs: Long) {
+    private fun handlePlay(url: String?, startPositionMs: Long, title: String? = null) {
         if (!url.isNullOrBlank()) {
             isSwitchingEpisode.set(false)
-            val singleQueue = listOf(Episode.createSingle(url))
+            val singleQueue = listOf(Episode.createSingle(url, title))
             handlePlayQueue(singleQueue, 0, startPositionMs, autoPlayNext = false)
         } else {
             handleResume()

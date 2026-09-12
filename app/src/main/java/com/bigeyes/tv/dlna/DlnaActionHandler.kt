@@ -149,25 +149,33 @@ class DlnaActionHandler(
         Log.i(TAG, "DLNA AVTransport SOAPAction: $soapAction")
 
         return when {
-            soapAction.contains("SetAVTransportURI") || body.contains("SetAVTransportURI") -> {
-                val streamUrl = extractXmlTagValue(body, "CurrentURI")?.let { cleanXmlValue(it) }.orEmpty()
-                Log.i(TAG, "DLNA SetAVTransportURI extracted URL: $streamUrl")
-                if (streamUrl.isNotBlank()) {
-                    playerManager.play(streamUrl, 0L)
-                }
-                buildSoapResponse("SetAVTransportURIResponse", "urn:schemas-upnp-org:service:AVTransport:1", "")
-            }
             soapAction.contains("SetNextAVTransportURI") || body.contains("SetNextAVTransportURI") -> {
                 val nextStreamUrl = extractXmlTagValue(body, "NextURI")?.let { cleanXmlValue(it) }.orEmpty()
                 Log.i(TAG, "DLNA SetNextAVTransportURI extracted URL: $nextStreamUrl")
                 playerManager.setNextUrl(if (nextStreamUrl.isNotBlank()) nextStreamUrl else null)
                 buildSoapResponse("SetNextAVTransportURIResponse", "urn:schemas-upnp-org:service:AVTransport:1", "")
             }
+            soapAction.contains("SetAVTransportURI") || body.contains("SetAVTransportURI") -> {
+                val streamUrl = extractXmlTagValue(body, "CurrentURI")?.let { cleanXmlValue(it) }.orEmpty()
+                val metadata = extractXmlTagValue(body, "CurrentURIMetaData")?.let { cleanXmlValue(it) }.orEmpty()
+                val title = if (metadata.isNotBlank()) {
+                    extractXmlTagValue(metadata, "dc:title") ?: extractXmlTagValue(metadata, "title")
+                } else null
+                Log.i(TAG, "DLNA SetAVTransportURI extracted URL: $streamUrl, title: $title")
+                if (streamUrl.isNotBlank()) {
+                    playerManager.play(streamUrl, 0L, title)
+                }
+                buildSoapResponse("SetAVTransportURIResponse", "urn:schemas-upnp-org:service:AVTransport:1", "")
+            }
             soapAction.contains("Play") || body.contains("<u:Play") || body.contains("<Play") -> {
                 val streamUrl = extractXmlTagValue(body, "CurrentURI")?.let { cleanXmlValue(it) }.orEmpty()
-                if (streamUrl.isNotBlank() && (playerManager.currentState == PlayerState.IDLE || playerManager.currentUrl == null)) {
-                    Log.i(TAG, "DLNA Play containing CurrentURI: $streamUrl")
-                    playerManager.play(streamUrl, 0L)
+                val metadata = extractXmlTagValue(body, "CurrentURIMetaData")?.let { cleanXmlValue(it) }.orEmpty()
+                val title = if (metadata.isNotBlank()) {
+                    extractXmlTagValue(metadata, "dc:title") ?: extractXmlTagValue(metadata, "title")
+                } else null
+                if (streamUrl.isNotBlank()) {
+                    Log.i(TAG, "DLNA Play containing CurrentURI: $streamUrl, title: $title")
+                    playerManager.play(streamUrl, 0L, title)
                 } else {
                     playerManager.resume()
                 }
@@ -267,7 +275,11 @@ class DlnaActionHandler(
     }
 
     private fun cleanXmlValue(value: String): String {
-        return value.replace("&amp;", "&")
+        var cleaned = value.trim()
+        if (cleaned.startsWith("<![CDATA[", ignoreCase = true) && cleaned.endsWith("]]>")) {
+            cleaned = cleaned.substring(9, cleaned.length - 3).trim()
+        }
+        return cleaned.replace("&amp;", "&")
             .replace("&lt;", "<")
             .replace("&gt;", ">")
             .replace("&quot;", "\"")
@@ -284,6 +296,29 @@ class DlnaActionHandler(
     }
 
     private fun extractBodyString(session: IHTTPSession): String {
+        // 1. If Content-Length header is present, read raw bytes directly from inputStream
+        // This avoids NanoHTTPD's parseBody creating temporary files in java.io.tmpdir (which
+        // on Android TV may fail with Permission Denied when body size exceeds 1024 bytes).
+        val lenStr = session.headers["content-length"]
+        val len = lenStr?.toIntOrNull() ?: 0
+        if (len > 0) {
+            try {
+                val buffer = ByteArray(len)
+                var totalRead = 0
+                while (totalRead < len) {
+                    val read = session.inputStream.read(buffer, totalRead, len - totalRead)
+                    if (read == -1) break
+                    totalRead += read
+                }
+                if (totalRead > 0) {
+                    return String(buffer, 0, totalRead, Charsets.UTF_8)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error reading inputStream directly: ${e.message}")
+            }
+        }
+
+        // 2. Fallback to parseBody for form-urlencoded or chunked payloads
         val files = HashMap<String, String>()
         try {
             session.parseBody(files)

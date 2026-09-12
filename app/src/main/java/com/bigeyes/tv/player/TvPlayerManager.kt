@@ -101,10 +101,10 @@ class TvPlayerManager private constructor(private val context: Context) {
         listeners.remove(listener)
     }
 
-    fun play(url: String, startPositionMs: Long = 0L) {
-        Log.i(TAG, "TvPlayerManager.play url=$url, startPositionMs=$startPositionMs")
+    fun play(url: String, startPositionMs: Long = 0L, title: String? = null) {
+        Log.i(TAG, "TvPlayerManager.play url=$url, startPositionMs=$startPositionMs, title=$title")
         currentUrl = url
-        controller.dispatch(PlaybackCommand.Play(url, startPositionMs))
+        controller.dispatch(PlaybackCommand.Play(url, startPositionMs, title))
         bringActivityToFront()
     }
 

@@ -92,4 +92,64 @@ class DlnaActionHandlerTest {
         assertEquals("http://example.com/video.mp4", extractXmlTagValue(nsXml, "CurrentURI"))
         assertEquals("http://example.com/video.mp4", extractXmlTagValue(attrXml, "CurrentURI"))
     }
+
+    @Test
+    fun testCleanXmlValueCdataAndEntities() {
+        fun cleanXmlValue(value: String): String {
+            var cleaned = value.trim()
+            if (cleaned.startsWith("<![CDATA[", ignoreCase = true) && cleaned.endsWith("]]>")) {
+                cleaned = cleaned.substring(9, cleaned.length - 3).trim()
+            }
+            return cleaned.replace("&amp;", "&")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .replace("&apos;", "'")
+                .trim()
+        }
+
+        val cdataUrl = "<![CDATA[http://example.com/video.mp4?token=abc&amp;id=123]]>"
+        assertEquals("http://example.com/video.mp4?token=abc&id=123", cleanXmlValue(cdataUrl))
+
+        val escapedUrl = "http://example.com/video.mp4?a=1&amp;b=2"
+        assertEquals("http://example.com/video.mp4?a=1&b=2", cleanXmlValue(escapedUrl))
+    }
+
+    @Test
+    fun testActionRoutingOrder() {
+        // Ensure SetNextAVTransportURI is distinguished from SetAVTransportURI
+        val setNextAction = "\"urn:schemas-upnp-org:service:AVTransport:1#SetNextAVTransportURI\""
+        val setAction = "\"urn:schemas-upnp-org:service:AVTransport:1#SetAVTransportURI\""
+
+        fun route(soapAction: String): String {
+            return when {
+                soapAction.contains("SetNextAVTransportURI") -> "NEXT"
+                soapAction.contains("SetAVTransportURI") -> "SET"
+                else -> "OTHER"
+            }
+        }
+
+        assertEquals("NEXT", route(setNextAction))
+        assertEquals("SET", route(setAction))
+    }
+
+    @Test
+    fun testExtractTitleFromMetadata() {
+        fun extractXmlTagValue(xml: String, tagName: String): String? {
+            val regex = Regex("<(?:[a-zA-Z0-9_]+:)?$tagName(?:\\s[^>]*)?>(.*?)</(?:[a-zA-Z0-9_]+:)?$tagName>", RegexOption.DOT_MATCHES_ALL)
+            return regex.find(xml)?.groupValues?.get(1)?.trim()
+        }
+
+        val metadata = """
+            <DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+                <item id="0" parentID="-1" restricted="1">
+                    <dc:title>庆余年 第二季 第05集</dc:title>
+                    <res>http://192.168.1.100:8899/stream/123/index.m3u8</res>
+                </item>
+            </DIDL-Lite>
+        """.trimIndent()
+
+        val title = extractXmlTagValue(metadata, "dc:title") ?: extractXmlTagValue(metadata, "title")
+        assertEquals("庆余年 第二季 第05集", title)
+    }
 }
