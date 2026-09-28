@@ -26,16 +26,75 @@ object PlaybackIntentContract {
     const val ACTION_STOP = "com.bigeyes.tv.action.STOP"
     const val ACTION_SEEK = "com.bigeyes.tv.action.SEEK"
 
+    // Status broadcast sent from BigEyesTV back to the BigEyes phone app
+    const val ACTION_STATUS_UPDATE = "com.bigeyes.tv.action.STATUS_UPDATE"
+
     // Extras
     const val EXTRA_SERIES_ID = "extra_series_id"
     const val EXTRA_SERIES_TITLE = "extra_series_title"
+    const val EXTRA_SEASON_NUMBER = "extra_season_number"
     const val EXTRA_EPISODE_INDEX = "extra_episode_index"
     const val EXTRA_EPISODE_NUMBER = "extra_episode_number"
     const val EXTRA_EPISODE_TITLE = "extra_episode_title"
+    const val EXTRA_TOTAL_COUNT = "extra_total_count"
     const val EXTRA_PLAY_URL = "extra_play_url"
     const val EXTRA_EPISODE_QUEUE = "extra_episode_queue"
     const val EXTRA_SEEK_POSITION = "extra_seek_position"
+    const val EXTRA_POSITION_MS = "extra_position_ms"
+    const val EXTRA_DURATION_MS = "extra_duration_ms"
     const val EXTRA_AUTO_PLAY_NEXT = "extra_auto_play_next"
+    const val EXTRA_STATE = "extra_state"
+    const val EXTRA_HEADER_REFERER = "extra_header_referer"
+    const val EXTRA_HEADER_USER_AGENT = "extra_header_user_agent"
+    const val EXTRA_HEADER_COOKIE = "extra_header_cookie"
+
+    // Playback states mirrored by the companion BigEyes phone app
+    const val STATE_PLAYING = "PLAYING"
+    const val STATE_PAUSED = "PAUSED"
+    const val STATE_COMPLETED = "COMPLETED"
+    const val STATE_STOPPED = "STOPPED"
+    const val STATE_ERROR = "ERROR"
+
+    // Companion application package (target of the status broadcast)
+    const val PACKAGE_BIGEYES = "com.bigeyes.app"
+
+    /**
+     * Read an absolute playback position (ms) from an Intent.
+     * Accepts both the canonical [EXTRA_SEEK_POSITION] key and the [EXTRA_POSITION_MS] alias
+     * used by older BigEyes phone builds, so seek / resume never silently degrade to 0.
+     */
+    fun readPositionMs(intent: Intent): Long = resolvePositionMs(
+        seekPosition = intent.getLongExtra(EXTRA_SEEK_POSITION, Long.MIN_VALUE),
+        positionAlias = intent.getLongExtra(EXTRA_POSITION_MS, 0L)
+    )
+
+    /**
+     * Pure position resolution logic. [Long.MIN_VALUE] marks "canonical key absent".
+     */
+    fun resolvePositionMs(seekPosition: Long, positionAlias: Long): Long {
+        val value = if (seekPosition != Long.MIN_VALUE) seekPosition else positionAlias
+        return value.coerceAtLeast(0L)
+    }
+
+    /**
+     * Collect anti-hotlink request headers forwarded by the phone app.
+     */
+    fun readHeaders(intent: Intent): Map<String, String> = buildHeaders(
+        referer = intent.getStringExtra(EXTRA_HEADER_REFERER),
+        userAgent = intent.getStringExtra(EXTRA_HEADER_USER_AGENT),
+        cookie = intent.getStringExtra(EXTRA_HEADER_COOKIE)
+    )
+
+    /**
+     * Pure header assembly. Blank / missing values are dropped.
+     */
+    fun buildHeaders(referer: String?, userAgent: String?, cookie: String?): Map<String, String> {
+        val headers = mutableMapOf<String, String>()
+        referer?.takeIf { it.isNotBlank() }?.let { headers["Referer"] = it }
+        userAgent?.takeIf { it.isNotBlank() }?.let { headers["User-Agent"] = it }
+        cookie?.takeIf { it.isNotBlank() }?.let { headers["Cookie"] = it }
+        return headers
+    }
 
     /**
      * Parse and validate an incoming Intent safely into a PlaybackCommand.
@@ -55,8 +114,7 @@ object PlaybackIntentContract {
                 ACTION_RESUME -> PlaybackCommand.Resume
                 ACTION_STOP -> PlaybackCommand.Stop
                 ACTION_SEEK -> {
-                    val pos = intent.getLongExtra(EXTRA_SEEK_POSITION, 0L)
-                    PlaybackCommand.Seek(pos.coerceAtLeast(0L))
+                    PlaybackCommand.Seek(readPositionMs(intent))
                 }
                 Intent.ACTION_VIEW -> {
                     // Fallback for standard Android VIEW intents (e.g. clicking a stream link)
@@ -86,18 +144,26 @@ object PlaybackIntentContract {
 
         val seriesId = intent.getStringExtra(EXTRA_SERIES_ID) ?: "single_series"
         val seriesTitle = intent.getStringExtra(EXTRA_SERIES_TITLE) ?: "投屏播放"
+        val seasonNumber = intent.getIntExtra(EXTRA_SEASON_NUMBER, 1)
         val epIndex = intent.getIntExtra(EXTRA_EPISODE_INDEX, 0)
         val epNumber = intent.getIntExtra(EXTRA_EPISODE_NUMBER, epIndex + 1)
         val epTitle = intent.getStringExtra(EXTRA_EPISODE_TITLE) ?: ""
-        val startPos = intent.getLongExtra(EXTRA_SEEK_POSITION, 0L)
+        val startPos = readPositionMs(intent)
+        val headers = readHeaders(intent)
 
         // Check if a queue is also bundled with ACTION_PLAY
         val rawQueue = intent.getStringExtra(EXTRA_EPISODE_QUEUE)
         if (!rawQueue.isNullOrBlank()) {
             val episodes = parseEpisodesJson(rawQueue)
             if (episodes.isNotEmpty()) {
+                // Intent level headers act as a fallback for episodes without their own headers
+                val queue = if (headers.isEmpty()) {
+                    episodes
+                } else {
+                    episodes.map { if (it.headers.isEmpty()) it.copy(headers = headers) else it }
+                }
                 val autoPlay = intent.getBooleanExtra(EXTRA_AUTO_PLAY_NEXT, true)
-                return PlaybackCommand.PlayQueue(episodes, epIndex, startPos, autoPlay)
+                return PlaybackCommand.PlayQueue(queue, epIndex, startPos, autoPlay)
             }
         }
 
@@ -105,13 +171,14 @@ object PlaybackIntentContract {
         val singleEpisode = Episode(
             seriesId = seriesId,
             seriesTitle = seriesTitle,
-            seasonNumber = 1,
+            seasonNumber = seasonNumber,
             episodeNumber = epNumber,
             episodeTitle = epTitle,
             episodeIndex = epIndex,
             playUrl = playUrl,
             thumbnail = null,
-            duration = 0L
+            duration = 0L,
+            headers = headers
         )
         return PlaybackCommand.PlayQueue(
             queue = listOf(singleEpisode),
@@ -124,7 +191,7 @@ object PlaybackIntentContract {
     private fun parsePlayQueueIntent(intent: Intent): PlaybackCommand? {
         val rawQueue = intent.getStringExtra(EXTRA_EPISODE_QUEUE)
         val startIndex = intent.getIntExtra(EXTRA_EPISODE_INDEX, 0)
-        val startPos = intent.getLongExtra(EXTRA_SEEK_POSITION, 0L)
+        val startPos = readPositionMs(intent)
         val autoPlay = intent.getBooleanExtra(EXTRA_AUTO_PLAY_NEXT, true)
 
         if (rawQueue.isNullOrBlank()) {
@@ -143,8 +210,15 @@ object PlaybackIntentContract {
             return null
         }
 
+        val headers = readHeaders(intent)
+        val queue = if (headers.isEmpty()) {
+            episodes
+        } else {
+            episodes.map { if (it.headers.isEmpty()) it.copy(headers = headers) else it }
+        }
+
         return PlaybackCommand.PlayQueue(
-            queue = episodes,
+            queue = queue,
             startIndex = startIndex,
             startPositionMs = startPos,
             autoPlayNext = autoPlay

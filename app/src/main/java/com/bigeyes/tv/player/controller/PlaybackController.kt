@@ -15,10 +15,16 @@ import com.bigeyes.tv.player.model.Episode
 import com.bigeyes.tv.player.model.EpisodeQueue
 import com.bigeyes.tv.player.model.PlaybackSession
 import com.bigeyes.tv.player.model.PlaybackState
+import com.bigeyes.tv.player.remote.TvStatusReporter
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -36,6 +42,10 @@ class PlaybackController private constructor(
     private val completionGuard = CompletionGuard()
     private val isSwitchingEpisode = AtomicBoolean(false)
 
+    /** Pushes playback status back to the companion BigEyes phone app. */
+    private val statusReporter = TvStatusReporter(context.applicationContext)
+    private val statusScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
     val episodeQueue = EpisodeQueue()
 
     private val _session = MutableStateFlow(PlaybackSession.INITIAL)
@@ -46,6 +56,9 @@ class PlaybackController private constructor(
     init {
         playerEngine.setListener(this)
         startProgressTicker()
+        statusScope.launch {
+            session.collect { statusReporter.onSessionChanged(it) }
+        }
     }
 
     /**
@@ -297,6 +310,8 @@ class PlaybackController private constructor(
             )
         }
 
+        // Apply anti-hotlink headers (Referer / User-Agent / Cookie) before preparing media
+        playerEngine.setRequestHeaders(episode.headers)
         playerEngine.play(episode.playUrl, startPositionMs)
 
         // Safety fallback to unlock switching mutex after delay
@@ -463,6 +478,7 @@ class PlaybackController private constructor(
 
     fun release() {
         stopProgressTicker()
+        statusScope.cancel()
         saveCurrentProgressToHistory()
         playerEngine.release()
         completionGuard.reset()

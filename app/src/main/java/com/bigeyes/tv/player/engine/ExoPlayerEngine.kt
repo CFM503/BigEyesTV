@@ -8,7 +8,10 @@ import android.util.Log
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import com.bigeyes.tv.config.TvPlayerConfig
 import com.bigeyes.tv.player.model.PlaybackState
@@ -23,6 +26,13 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
     private var exoPlayer: ExoPlayer? = null
     private var listener: PlayerEngineListener? = null
 
+    /**
+     * Shared HTTP factory holding the anti-hotlink headers of the current episode.
+     * Headers are re-applied before every prepare() so playlist + segment requests carry them.
+     */
+    private val httpRequestFactory = DefaultHttpDataSource.Factory()
+    private val dataSourceFactory = DefaultDataSource.Factory(context.applicationContext, httpRequestFactory)
+
     @Volatile
     private var currentUrl: String? = null
 
@@ -34,6 +44,10 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
 
     @Volatile
     private var isBuffering: Boolean = false
+
+    /** Anti-hotlink headers applied to every HTTP request of the current media. */
+    @Volatile
+    private var requestHeaders: Map<String, String> = emptyMap()
 
     private var lastKnownPositionMs = 0L
     private var recoveryAttempts = 0
@@ -57,7 +71,9 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
 
     private fun initPlayerOnMainThread() {
         if (exoPlayer != null) return
-        val player = ExoPlayer.Builder(context).build()
+        val player = ExoPlayer.Builder(context)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+            .build()
         player.addListener(object : Player.Listener {
             override fun onRenderedFirstFrame() {
                 if (resumePlaybackOnFirstFrame) {
@@ -271,6 +287,16 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
         }
     }
 
+    override fun setRequestHeaders(headers: Map<String, String>) {
+        requestHeaders = headers
+        runOnMain {
+            httpRequestFactory.setDefaultRequestProperties(headers)
+            if (headers.isNotEmpty()) {
+                Log.d(TAG, "Applied request headers: ${headers.keys.joinToString()}")
+            }
+        }
+    }
+
     override fun resume() {
         runOnMain {
             initPlayerOnMainThread()
@@ -388,6 +414,8 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
         try {
             currentState = PlaybackState.LOADING
             listener?.onEngineStateChanged(PlaybackState.LOADING)
+            // Re-apply anti-hotlink headers before every (re)prepare so recovery keeps them
+            httpRequestFactory.setDefaultRequestProperties(requestHeaders)
             // Replace media item directly without stop() to avoid resetting state to IDLE
             player.setMediaItem(MediaItem.fromUri(Uri.parse(url)), startPositionMs)
             player.prepare()

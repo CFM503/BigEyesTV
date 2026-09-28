@@ -2,6 +2,29 @@
 
 本文档记录 `BigEyes-TV` 的所有版本迭代与变更历史。
 
+## [v1.2.0] - 2026-09-28 (BigEyes 直连投屏全链路：状态回传、播控命令与防盗链请求头)
+
+### ✨ 跨应用直连投屏 (Direct Cast Protocol)
+* **播放状态回传广播 (`TvStatusReporter`)**:
+  * 电视端经 `ACTION_STATUS_UPDATE` 向手机端回传 `PLAYING / PAUSED / COMPLETED / STOPPED / ERROR` 状态、剧集索引与进度时长，手机端控制条得以镜像真实大屏进度与播放状态；
+  * 节流策略：状态或集数变化立即上报，纯进度每 1000ms 上报一次；首次进入 `ACTIVE` 前跳过初始 `STOPPED / IDLE`，避免与手机端接收器注册竞态导致会话被误置为空闲；
+  * 未安装 BigEyes 时自动跳过广播发送，无多余开销。
+* **播控命令广播接收器 (`PlaybackCommandReceiver`)**:
+  * 新增 manifest 注册的导出 Receiver，处理手机端 `NEXT / PREVIOUS / PAUSE / RESUME / STOP / SEEK` 广播命令，补全此前仅 Activity 声明 intent-filter 导致 `sendBroadcast` 全部丢失的缺口。
+* **防盗链请求头透传 (Anti-hotlink Header Passthrough)**:
+  * `Episode` 模型新增 `headers` 字段并参与 JSON 序列化/反序列化，随队列下发到电视端；
+  * `ExoPlayerEngine` 通过 `DefaultHttpDataSource.Factory.setDefaultRequestProperties` + `DefaultDataSource.Factory` + `DefaultMediaSourceFactory` 在每次 `prepare` 前重新应用 `Referer / User-Agent / Cookie`，解决受限站点在电视端无法起播的问题。
+* **投屏协议契约扩展 (`PlaybackIntentContract`)**:
+  * 新增 `ACTION_PLAY_QUEUE`、`EXTRA_EPISODE_QUEUE`、`EXTRA_SEASON_NUMBER`、`EXTRA_TOTAL_COUNT`、`EXTRA_SEEK_POSITION`（与旧别名 `EXTRA_POSITION_MS` 双键兼容）、`EXTRA_DURATION_MS` 及 `PACKAGE_BIGEYES` 常量；
+  * 起播位置解析归一化为 `resolvePositionMs`，同时兼容规范键与旧手机端别名键；请求头解析为纯函数 `buildHeaders`，可单测覆盖。
+* **队列语义**：支持 `PLAY_QUEUE` 整队列下放，电视端本地连播自动切集；`seasonNumber / total_count` 等 extras 随 intent 解析并落入会话。
+
+### 🧪 质量保障
+* `PlaybackIntentContractTest` 扩展至 10 例，新增 `TvStatusReporterTest` 6 例（快照映射、状态节流、初始 STOPPED 跳过等）；单测 52 例全绿，`assembleDebug` 构建通过。
+* 版本号提升至 `versionCode 16 / versionName 1.2.0`（手机端以 `MIN_TV_VERSION_CODE = 16` 作为启用直连投屏的最低版本门槛）。
+
+---
+
 ## [v1.1.2] - 2026-09-12 (解决视频播放中再次推送新视频失败与无法切片问题)
 
 ### 🐛 缺陷修复与流媒体推送链路强化

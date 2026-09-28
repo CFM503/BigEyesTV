@@ -75,6 +75,20 @@
             android:foregroundServiceType="mediaPlayback" />
 
         <receiver
+            android:name=".playback.PlaybackCommandReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.bigeyes.tv.action.NEXT" />
+                <action android:name="com.bigeyes.tv.action.PREVIOUS" />
+                <action android:name="com.bigeyes.tv.action.PAUSE" />
+                <action android:name="com.bigeyes.tv.action.RESUME" />
+                <action android:name="com.bigeyes.tv.action.STOP" />
+                <action android:name="com.bigeyes.tv.action.SEEK" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
             android:name=".receiver.BootReceiver"
             android:enabled="true"
             android:exported="true">

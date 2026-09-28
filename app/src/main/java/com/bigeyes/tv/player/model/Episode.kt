@@ -15,7 +15,12 @@ data class Episode(
     val episodeIndex: Int = 0,
     val playUrl: String,
     val thumbnail: String? = null,
-    val duration: Long = 0L
+    val duration: Long = 0L,
+    /**
+     * Optional anti-hotlink request headers (Referer / User-Agent / Cookie) forwarded by the
+     * BigEyes phone app. Applied by the player engine for every HTTP request of this episode.
+     */
+    val headers: Map<String, String> = emptyMap()
 ) : Serializable {
 
     fun toDisplayTitle(): String {
@@ -45,6 +50,11 @@ data class Episode(
             put("playUrl", playUrl)
             if (thumbnail != null) put("thumbnail", thumbnail)
             put("duration", duration)
+            if (headers.isNotEmpty()) {
+                val headerObj = JSONObject()
+                headers.forEach { (key, value) -> headerObj.put(key, value) }
+                put("headers", headerObj)
+            }
         }
     }
 
@@ -61,11 +71,24 @@ data class Episode(
                 episodeIndex = json.optInt("episodeIndex", 0),
                 playUrl = json.optString("playUrl", ""),
                 thumbnail = json.optString("thumbnail", "").takeIf { it.isNotBlank() },
-                duration = json.optLong("duration", 0L)
+                duration = json.optLong("duration", 0L),
+                headers = parseHeaders(json.optJSONObject("headers"))
             )
         }
 
-        fun createSingle(url: String, title: String? = null): Episode {
+        private fun parseHeaders(obj: JSONObject?): Map<String, String> {
+            if (obj == null) return emptyMap()
+            val headers = mutableMapOf<String, String>()
+            val keys = obj.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                val value = obj.optString(key, "")
+                if (value.isNotBlank()) headers[key] = value
+            }
+            return headers
+        }
+
+        fun createSingle(url: String, title: String? = null, headers: Map<String, String> = emptyMap()): Episode {
             val display = if (!title.isNullOrBlank()) title else "投屏流媒体"
             val id = "stream_" + (url.hashCode().toLong() and 0xFFFFFFFFL).toString(16)
             return Episode(
@@ -77,7 +100,8 @@ data class Episode(
                 episodeIndex = 0,
                 playUrl = url,
                 thumbnail = null,
-                duration = 0L
+                duration = 0L,
+                headers = headers
             )
         }
     }

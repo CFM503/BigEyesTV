@@ -37,4 +37,11 @@ interface PlayerEngine {
     fun detachPlayerView(playerView: PlayerView)
     fun setListener(listener: PlayerEngineListener?)
     fun manualRetry()
+
+    /**
+     * Apply anti-hotlink request headers (Referer / User-Agent / Cookie) forwarded by the
+     * companion phone app. Must be called before [play] so that the underlying HTTP data
+     * source is rebuilt with the new headers.
+     */
+    fun setRequestHeaders(headers: Map<String, String>) {}
 }
