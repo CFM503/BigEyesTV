@@ -2,6 +2,15 @@
 
 本文档记录 `BigEyes-TV` 的所有版本迭代与变更历史。
 
+## [v1.2.3] - 2026-09-29 (CI 发布链路修复：测试可跨平台执行)
+
+### 🛠 CI / 发布
+* **`curl` 按平台解析**：`HttpServerIntegrationTest` 原先硬编码 `curl.exe`，在 Linux CI 上 `ProcessBuilder` 启动进程即抛 `IOException`，`Run Unit Tests` 失败导致 `assembleRelease` 从未执行，自测试重写起的 4 次发布（#38/#39/#40/#41）全部中断；现按 `os.name` 选择 `curl.exe` / `curl`，Windows 与 Linux 均可跑通；
+* **无功能变更**，APK 与 `v1.2.2` 等价；
+* 单测 77 项全部通过；`versionCode 19 / versionName 1.2.3`。
+
+---
+
 ## [v1.2.2] - 2026-09-29 (选集可用性修复：按队列位置选集、切集竞态与游标回滚)
 
 ### 📺 选集链路 (P1)
