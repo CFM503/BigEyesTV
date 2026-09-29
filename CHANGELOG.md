@@ -2,6 +2,18 @@
 
 本文档记录 `BigEyes-TV` 的所有版本迭代与变更历史。
 
+## [v1.2.2] - 2026-09-29 (选集可用性修复：按队列位置选集、切集竞态与游标回滚)
+
+### 📺 选集链路 (P1)
+* **选集按队列位置下标**：`EpisodeListDialog` 由 `episode.episodeIndex`（JSON 缺省为 0）改为 adapter 实际位置（`bindingAdapterPosition` + `NO_POSITION` 守卫），序列化时未归一化下标的剧集列表不再「点谁都跳回第 1 集」；与高亮判断、`EpisodeQueue.setCurrentIndex()` 的位置语义保持一致。
+* **切集竞态修复**：`handlePlayEpisode` 原先先改游标再抢 `isSwitchingEpisode` 锁，切集进行中再次点选会「改了下标却不换片」，导致高亮、上一集/下一集全部错位；现在改为「校验下标 → 抢锁 → 改游标」，任一步失败都会回滚锁与游标。
+
+### 🧪 可测性
+* `BinaryPlistGeneratorTest` 产物改写 `build/tmp/`（不再往模块目录丢 `sample_play.bplist`），并补 `bplist00` 头与非空断言；
+* 单测 77 项全部通过；`versionCode 18 / versionName 1.2.2`。
+
+---
+
 ## [v1.2.1] - 2026-09-29 (跨端联调审计修复：网络中断提示、缓冲期遥控保护、DLNA/AirPlay 协议补全)
 
 ### 🌐 网络与缓冲体验 (P1)
