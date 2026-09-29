@@ -1,9 +1,8 @@
-package com.bigeyes.tv.airplay
+﻿package com.bigeyes.tv.airplay
 
-import android.content.Context
 import android.util.Log
-import com.bigeyes.tv.player.TvPlayerManager
-import com.bigeyes.tv.utils.DeviceIdManager
+import com.bigeyes.tv.player.PlaybackFacade
+import com.bigeyes.tv.utils.DeviceIdentity
 import com.bigeyes.tv.utils.PlistHelper
 import fi.iki.elonen.NanoHTTPD
 import fi.iki.elonen.NanoHTTPD.IHTTPSession
@@ -19,10 +18,9 @@ import java.util.HashMap
  * Handles AirPlay Video Playback HTTP endpoints in NanoHTTPD.
  */
 class AirPlayHttpHandler(
-    private val context: Context,
-    private val playerManager: TvPlayerManager
+    private val playerManager: PlaybackFacade,
+    private val deviceIdentity: DeviceIdentity
 ) {
-    private val deviceIdManager = DeviceIdManager.getInstance(context)
 
     fun canHandle(uri: String): Boolean {
         return uri == "/server-info" ||
@@ -51,7 +49,9 @@ class AirPlayHttpHandler(
             "/scrub" -> handleScrub(session)
             "/stop" -> handleStop(session)
             "/reverse" -> handleReverse(session)
-            "/setProperty", "/getProperty", "/slideshow-features" -> handleAuxiliary(session)
+            "/setProperty" -> handleSetProperty(session)
+            "/getProperty" -> handleGetProperty(session)
+            "/slideshow-features" -> handleSlideshowFeatures(session)
             else -> NanoHTTPD.newFixedLengthResponse(
                 Response.Status.NOT_FOUND,
                 NanoHTTPD.MIME_PLAINTEXT,
@@ -65,7 +65,7 @@ class AirPlayHttpHandler(
      */
     private fun handleServerInfo(session: IHTTPSession): Response {
         val xml = PlistHelper.generateServerInfoXml(
-            deviceId = deviceIdManager.deviceId,
+            deviceId = deviceIdentity.deviceId,
             model = "AppleTV2,1",
             features = 7L,
             srcvers = "130.14",
@@ -211,10 +211,40 @@ class AirPlayHttpHandler(
     }
 
     /**
-     * POST /reverse
+     * POST /reverse - reverse HTTP channel used by the sender for event callbacks.
+     * The sender identifies itself with `X-Apple-Session-ID`; we acknowledge it so the
+     * client can correlate the reverse channel with this session.
      */
     private fun handleReverse(session: IHTTPSession): Response {
-        // Reverse connection not needed for video streaming
+        val sessionId = session.headers["x-apple-session-id"]
+            ?: session.headers["X-Apple-Session-ID"]
+            ?: deviceIdentity.deviceId
+        Log.i(TAG, "AirPlay /reverse opened for session=$sessionId")
+
+        val response = NanoHTTPD.newFixedLengthResponse(
+            Response.Status.OK,
+            NanoHTTPD.MIME_PLAINTEXT,
+            ""
+        )
+        response.addHeader("Server", "AirTunes/130.14")
+        response.addHeader("X-Apple-Session-ID", sessionId)
+        response.addHeader("Connection", "keep-alive")
+        return response
+    }
+
+    /**
+     * POST /setProperty - sender pushes playback properties (volume, etc).
+     * Returns 200 so the sender treats the update as accepted instead of retrying.
+     */
+    private fun handleSetProperty(session: IHTTPSession): Response {
+        val bodyBytes = extractBodyBytes(session)
+        val contentType = session.headers["content-type"]
+        val applied = PlistHelper.parsePropertyRequest(bodyBytes, contentType)
+        applied?.volume?.let { volume ->
+            Log.i(TAG, "AirPlay /setProperty volume=$volume")
+            playerManager.setPlaybackVolume(volume)
+        }
+
         val response = NanoHTTPD.newFixedLengthResponse(
             Response.Status.OK,
             NanoHTTPD.MIME_PLAINTEXT,
@@ -225,13 +255,39 @@ class AirPlayHttpHandler(
     }
 
     /**
-     * POST /setProperty, GET /getProperty, /slideshow-features
+     * GET /getProperty - sender reads back the current playback properties.
      */
-    private fun handleAuxiliary(session: IHTTPSession): Response {
+    private fun handleGetProperty(session: IHTTPSession): Response {
+        val durationSec = playerManager.getDurationMs() / 1000.0
+        val positionSec = playerManager.getCurrentPositionMs() / 1000.0
+        val isPlaying = playerManager.isPlaying()
+        val volume = playerManager.getPlaybackVolume()
+
+        val xml = PlistHelper.generatePlaybackPropertiesXml(
+            durationSec = durationSec,
+            positionSec = positionSec,
+            isPlaying = isPlaying,
+            volume = volume
+        )
+
         val response = NanoHTTPD.newFixedLengthResponse(
             Response.Status.OK,
-            NanoHTTPD.MIME_PLAINTEXT,
-            ""
+            MIME_APPLE_PLIST,
+            xml
+        )
+        response.addHeader("Server", "AirTunes/130.14")
+        return response
+    }
+
+    /**
+     * GET /slideshow-features - capability listing requested before a photo slideshow.
+     * BigEyes TV only plays video, so an empty transition set is reported honestly.
+     */
+    private fun handleSlideshowFeatures(session: IHTTPSession): Response {
+        val response = NanoHTTPD.newFixedLengthResponse(
+            Response.Status.OK,
+            MIME_APPLE_PLIST,
+            PlistHelper.generateSlideshowFeaturesXml()
         )
         response.addHeader("Server", "AirTunes/130.14")
         return response

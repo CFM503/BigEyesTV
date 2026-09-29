@@ -13,6 +13,12 @@ interface PlayerEngineListener {
     fun onError(error: String)
     fun onBufferingStateChanged(isBuffering: Boolean, message: String)
     fun onPositionDiscontinuity(positionMs: Long) {}
+
+    /** Emitted each time an automatic network recovery attempt is started. */
+    fun onNetworkRetry(attempt: Int, maxAttempts: Int) {}
+
+    /** Emitted when automatic network recovery is exhausted and playback cannot continue. */
+    fun onNetworkInterrupted(lastPositionMs: Long) {}
 }
 
 /**

@@ -71,6 +71,11 @@ jobs:
               f.write(notes)
           "
 
+      - name: Run Unit Tests
+        run: |
+          chmod +x gradlew
+          ./gradlew testDebugUnitTest --no-daemon
+
       - name: Build Release APK
         run: |
           chmod +x gradlew

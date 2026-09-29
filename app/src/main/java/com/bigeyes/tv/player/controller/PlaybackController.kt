@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import androidx.media3.ui.PlayerView
+import com.bigeyes.tv.config.TvPlayerConfig
 import com.bigeyes.tv.player.command.PlaybackCommand
 import com.bigeyes.tv.player.engine.ExoPlayerEngine
 import com.bigeyes.tv.player.engine.PlayerEngine
@@ -153,7 +154,11 @@ class PlaybackController private constructor(
                 seriesId = "",
                 seriesTitle = "",
                 currentIndex = 0,
-                isLastEpisode = true
+                isLastEpisode = true,
+                playbackHint = null,
+                retryAttempt = 0,
+                retryMax = 0,
+                isNetworkInterrupted = false
             )
         }
     }
@@ -306,7 +311,11 @@ class PlaybackController private constructor(
                 duration = episode.duration,
                 countdownRemainingSeconds = null,
                 errorMessage = null,
-                isLastEpisode = episodeQueue.isLast()
+                isLastEpisode = episodeQueue.isLast(),
+                playbackHint = null,
+                retryAttempt = 0,
+                retryMax = 0,
+                isNetworkInterrupted = false
             )
         }
 
@@ -359,7 +368,11 @@ class PlaybackController private constructor(
         _session.update {
             it.copy(
                 playbackState = PlaybackState.PLAYING,
-                errorMessage = null
+                errorMessage = null,
+                playbackHint = null,
+                retryAttempt = 0,
+                retryMax = 0,
+                isNetworkInterrupted = false
             )
         }
     }
@@ -405,7 +418,8 @@ class PlaybackController private constructor(
             it.copy(
                 playbackState = PlaybackState.ERROR,
                 errorMessage = error,
-                countdownRemainingSeconds = null
+                countdownRemainingSeconds = null,
+                playbackHint = error
             )
         }
     }
@@ -413,10 +427,41 @@ class PlaybackController private constructor(
     override fun onBufferingStateChanged(isBuffering: Boolean, message: String) {
         _session.update {
             if (isBuffering) {
-                it.copy(playbackState = PlaybackState.BUFFERING)
+                it.copy(
+                    playbackState = PlaybackState.BUFFERING,
+                    playbackHint = message.ifBlank { it.playbackHint }
+                )
             } else {
-                it.copy(playbackState = if (playerEngine.isPlaying()) PlaybackState.PLAYING else PlaybackState.PAUSED)
+                it.copy(
+                    playbackState = if (playerEngine.isPlaying()) PlaybackState.PLAYING else PlaybackState.PAUSED,
+                    playbackHint = null,
+                    retryAttempt = 0,
+                    retryMax = 0
+                )
             }
+        }
+    }
+
+    override fun onNetworkRetry(attempt: Int, maxAttempts: Int) {
+        _session.update {
+            it.copy(
+                retryAttempt = attempt,
+                retryMax = maxAttempts,
+                isNetworkInterrupted = false,
+                playbackHint = "网络不稳定，正在尝试恢复... ($attempt/$maxAttempts)"
+            )
+        }
+    }
+
+    override fun onNetworkInterrupted(lastPositionMs: Long) {
+        _session.update {
+            it.copy(
+                isNetworkInterrupted = true,
+                retryAttempt = 0,
+                retryMax = 0,
+                playbackHint = "网络连接中断",
+                position = if (lastPositionMs > 0L) lastPositionMs else it.position
+            )
         }
     }
 
@@ -427,7 +472,7 @@ class PlaybackController private constructor(
         val r = object : Runnable {
             override fun run() {
                 updateProgressAndCountdown()
-                mainHandler.postDelayed(this, 500L)
+                mainHandler.postDelayed(this, TvPlayerConfig.Overlay.PROGRESS_UPDATE_INTERVAL_MS)
             }
         }
         progressTickerRunnable = r
@@ -476,12 +521,17 @@ class PlaybackController private constructor(
         playerEngine.detachPlayerView(playerView)
     }
 
+    /**
+     * Releases the player engine, the progress ticker and status reporting. The singleton is
+     * cleared so a later [getInstance] constructs a fully functional controller again.
+     */
     fun release() {
         stopProgressTicker()
         statusScope.cancel()
         saveCurrentProgressToHistory()
         playerEngine.release()
         completionGuard.reset()
+        INSTANCE = null
     }
 
     companion object {

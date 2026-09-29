@@ -1,11 +1,12 @@
-package com.bigeyes.tv.dlna
+﻿package com.bigeyes.tv.dlna
 
-import android.content.Context
 import android.util.Log
+import com.bigeyes.tv.BuildConfig
+import com.bigeyes.tv.player.PlaybackFacade
 import com.bigeyes.tv.player.PlayerState
-import com.bigeyes.tv.player.TvPlayerManager
-import com.bigeyes.tv.utils.DeviceIdManager
-import com.bigeyes.tv.utils.NetworkUtils
+import com.bigeyes.tv.utils.DeviceIdentity
+import com.bigeyes.tv.utils.HttpDate
+import com.bigeyes.tv.utils.VolumeController
 import fi.iki.elonen.NanoHTTPD
 import fi.iki.elonen.NanoHTTPD.IHTTPSession
 import fi.iki.elonen.NanoHTTPD.Response
@@ -17,32 +18,34 @@ import java.util.Locale
  * Handles DLNA / UPnP MediaRenderer XML descriptions and SOAP control endpoints.
  */
 class DlnaActionHandler(
-    private val context: Context,
-    private val playerManager: TvPlayerManager,
+    private val playerManager: PlaybackFacade,
+    private val deviceIdentity: DeviceIdentity,
+    private val volumeController: VolumeController,
     private val port: Int = 7000
 ) {
-    private val deviceIdManager = DeviceIdManager.getInstance(context)
 
     fun canHandle(uri: String): Boolean {
         return uri == "/description.xml" ||
                 uri == "/avtransport.xml" ||
                 uri == "/renderingcontrol.xml" ||
                 uri == "/connectionmanager.xml" ||
-                uri.startsWith("/upnp/control/")
+                uri.startsWith("/upnp/control/") ||
+                uri.startsWith("/upnp/event/")
     }
 
     fun handleRequest(session: IHTTPSession): Response {
         val uri = session.uri
         Log.d(TAG, "DLNA HTTP request: ${session.method} $uri")
 
-        return when (uri) {
-            "/description.xml" -> handleDeviceDescription(session)
-            "/avtransport.xml" -> handleAvTransportScpd()
-            "/renderingcontrol.xml" -> handleRenderingControlScpd()
-            "/connectionmanager.xml" -> handleConnectionManagerScpd()
-            "/upnp/control/avtransport" -> handleAvTransportControl(session)
-            "/upnp/control/renderingcontrol" -> handleRenderingControl(session)
-            "/upnp/control/connectionmanager" -> handleConnectionManager(session)
+        return when {
+            uri.startsWith("/upnp/event/") -> handleEventSubscription(session, uri)
+            uri == "/description.xml" -> handleDeviceDescription()
+            uri == "/avtransport.xml" -> handleAvTransportScpd()
+            uri == "/renderingcontrol.xml" -> handleRenderingControlScpd()
+            uri == "/connectionmanager.xml" -> handleConnectionManagerScpd()
+            uri == "/upnp/control/avtransport" -> handleAvTransportControl(session)
+            uri == "/upnp/control/renderingcontrol" -> handleRenderingControl(session)
+            uri == "/upnp/control/connectionmanager" -> handleConnectionManager(session)
             else -> NanoHTTPD.newFixedLengthResponse(
                 Response.Status.NOT_FOUND,
                 NanoHTTPD.MIME_PLAINTEXT,
@@ -51,8 +54,47 @@ class DlnaActionHandler(
         }
     }
 
-    private fun handleDeviceDescription(session: IHTTPSession): Response {
-        val hostIp = NetworkUtils.getLocalIpAddress()
+    /**
+     * GENA eventing endpoint (`eventSubURL` advertised in description.xml).
+     *
+     * NOTE: NanoHTTPD 2.3.1 only maps a fixed set of HTTP methods onto [NanoHTTPD.Method],
+     * and `SUBSCRIBE`/`UNSUBSCRIBE` are not part of it, so those requests are rejected by
+     * the parser before reaching this handler. The route is nevertheless implemented so the
+     * endpoint answers correctly for any method NanoHTTPD does accept (GET/POST/HEAD), and
+     * so the handler contract matches what description.xml advertises.
+     */
+    private fun handleEventSubscription(session: IHTTPSession, uri: String): Response {
+        val service = uri.removePrefix("/upnp/event/")
+        val method = session.method?.name?.uppercase(Locale.US) ?: ""
+        Log.i(TAG, "GENA $method on /upnp/event/$service")
+
+        return when (method) {
+            "SUBSCRIBE" -> {
+                val sid = session.headers["sid"]?.takeIf { it.isNotBlank() }
+                    ?: "uuid:${deviceIdentity.deviceId}-$service"
+                val timeoutHeader = session.headers["timeout"]?.takeIf { it.isNotBlank() }
+                    ?: "Second-1800"
+                val resp = NanoHTTPD.newFixedLengthResponse(Response.Status.OK, NanoHTTPD.MIME_PLAINTEXT, "")
+                resp.addHeader("SID", sid)
+                resp.addHeader("TIMEOUT", timeoutHeader)
+                resp.addHeader("Date", HttpDate.now())
+                resp
+            }
+            "UNSUBSCRIBE" -> NanoHTTPD.newFixedLengthResponse(Response.Status.OK, NanoHTTPD.MIME_PLAINTEXT, "")
+            "GET" -> NanoHTTPD.newFixedLengthResponse(
+                Response.Status.METHOD_NOT_ALLOWED,
+                NanoHTTPD.MIME_PLAINTEXT,
+                "GENA event endpoints accept SUBSCRIBE/UNSUBSCRIBE only"
+            )
+            else -> NanoHTTPD.newFixedLengthResponse(
+                Response.Status.BAD_REQUEST,
+                NanoHTTPD.MIME_PLAINTEXT,
+                "Unsupported GENA method"
+            )
+        }
+    }
+
+    private fun handleDeviceDescription(): Response {
         val xml = """<?xml version="1.0" encoding="utf-8"?>
 <root xmlns="urn:schemas-upnp-org:device-1-0">
     <specVersion>
@@ -61,15 +103,15 @@ class DlnaActionHandler(
     </specVersion>
     <device>
         <deviceType>urn:schemas-upnp-org:device:MediaRenderer:1</deviceType>
-        <friendlyName>${deviceIdManager.deviceName}</friendlyName>
+        <friendlyName>${deviceIdentity.deviceName}</friendlyName>
         <manufacturer>BigEyes</manufacturer>
         <manufacturerURL>https://github.com/bigeyes-tv</manufacturerURL>
         <modelDescription>BigEyes TV Wireless Media Renderer</modelDescription>
         <modelName>BigEyes TV</modelName>
-        <modelNumber>0.1.0</modelNumber>
+        <modelNumber>${BuildConfig.VERSION_NAME}</modelNumber>
         <modelURL>https://github.com/bigeyes-tv</modelURL>
-        <serialNumber>${deviceIdManager.deviceId}</serialNumber>
-        <UDN>${deviceIdManager.udn}</UDN>
+        <serialNumber>${deviceIdentity.deviceId}</serialNumber>
+        <UDN>${deviceIdentity.udn}</UDN>
         <serviceList>
             <service>
                 <serviceType>urn:schemas-upnp-org:service:AVTransport:1</serviceType>
@@ -213,16 +255,33 @@ class DlnaActionHandler(
                 val posFormatted = formatSecondsToTimeString(posSec)
                 val rawUrl = playerManager.currentUrl ?: ""
                 val escapedUrl = escapeXml(rawUrl)
+                val title = playerManager.currentTrackTitle()
+                val track = playerManager.currentTrackIndex()
+                val metadata = if (rawUrl.isBlank()) {
+                    "NOT_IMPLEMENTED"
+                } else {
+                    escapeXml(
+                        """
+                        <DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/">
+                            <item id="1" parentID="0" restricted="1">
+                                <dc:title>${escapeXml(title)}</dc:title>
+                                <upnp:class>object.item.videoItem</upnp:class>
+                                <res protocolInfo="http-get:*:*:*">$escapedUrl</res>
+                            </item>
+                        </DIDL-Lite>
+                        """.trimIndent()
+                    )
+                }
 
                 val innerXml = """
-                    <Track>1</Track>
+                    <Track>$track</Track>
                     <TrackDuration>$durFormatted</TrackDuration>
-                    <TrackMetaData></TrackMetaData>
+                    <TrackMetaData>$metadata</TrackMetaData>
                     <TrackURI>$escapedUrl</TrackURI>
                     <RelTime>$posFormatted</RelTime>
                     <AbsTime>$posFormatted</AbsTime>
-                    <RelCount>2147483647</RelCount>
-                    <AbsCount>2147483647</AbsCount>
+                    <RelCount>0</RelCount>
+                    <AbsCount>0</AbsCount>
                 """.trimIndent()
                 buildSoapResponse("GetPositionInfoResponse", "urn:schemas-upnp-org:service:AVTransport:1", innerXml)
             }
@@ -241,18 +300,78 @@ class DlnaActionHandler(
                 """.trimIndent()
                 buildSoapResponse("GetTransportInfoResponse", "urn:schemas-upnp-org:service:AVTransport:1", innerXml)
             }
-            else -> buildSoapResponse("GenericResponse", "urn:schemas-upnp-org:service:AVTransport:1", "")
+            else -> buildSoapFault(
+                "urn:schemas-upnp-org:service:AVTransport:1",
+                UPNP_ERROR_INVALID_ACTION,
+                "Invalid Action"
+            )
         }
     }
 
     private fun handleRenderingControl(session: IHTTPSession): Response {
-        val innerXml = """<CurrentVolume>50</CurrentVolume><CurrentMute>0</CurrentMute>"""
-        return buildSoapResponse("RenderingControlResponse", "urn:schemas-upnp-org:service:RenderingControl:1", innerXml)
+        val body = extractBodyString(session)
+        val soapAction = session.headers["soapaction"] ?: session.headers["SOAPAction"] ?: ""
+        val service = "urn:schemas-upnp-org:service:RenderingControl:1"
+
+        return when {
+            soapAction.contains("SetVolume") || body.contains("SetVolume") -> {
+                val desired = extractXmlTagValue(body, "DesiredVolume")
+                    ?.let { cleanXmlValue(it) }
+                    ?.toIntOrNull()
+                if (desired != null) volumeController.setVolume(desired)
+                buildSoapResponse("SetVolumeResponse", service, "")
+            }
+            soapAction.contains("GetVolume") || body.contains("GetVolume") -> {
+                buildSoapResponse(
+                    "GetVolumeResponse",
+                    service,
+                    "<CurrentVolume>${volumeController.getVolume()}</CurrentVolume>"
+                )
+            }
+            soapAction.contains("SetMute") || body.contains("SetMute") -> {
+                val desired = extractXmlTagValue(body, "DesiredMute")
+                    ?.let { cleanXmlValue(it) }
+                    ?.lowercase(Locale.US)
+                if (desired != null) volumeController.setMuted(desired == "1" || desired == "true")
+                buildSoapResponse("SetMuteResponse", service, "")
+            }
+            soapAction.contains("GetMute") || body.contains("GetMute") -> {
+                val mute = if (volumeController.isMuted()) 1 else 0
+                buildSoapResponse("GetMuteResponse", service, "<CurrentMute>$mute</CurrentMute>")
+            }
+            else -> buildSoapFault(service, UPNP_ERROR_INVALID_ACTION, "Invalid Action")
+        }
     }
 
     private fun handleConnectionManager(session: IHTTPSession): Response {
-        val innerXml = """<Source>http-get:*:video/mp4:*,http-get:*:application/vnd.apple.mpegurl:*,http-get:*:*</Source><Sink></Sink>"""
-        return buildSoapResponse("GetProtocolInfoResponse", "urn:schemas-upnp-org:service:ConnectionManager:1", innerXml)
+        val body = extractBodyString(session)
+        val soapAction = session.headers["soapaction"] ?: session.headers["SOAPAction"] ?: ""
+        val service = "urn:schemas-upnp-org:service:ConnectionManager:1"
+        val protocolInfo =
+            "http-get:*:video/mp4:*,http-get:*:application/vnd.apple.mpegurl:*,http-get:*:*"
+
+        return when {
+            soapAction.contains("GetCurrentConnectionInfo") || body.contains("GetCurrentConnectionInfo") -> {
+                val innerXml = """
+                    <RcsID>0</RcsID>
+                    <AVTransportID>0</AVTransportID>
+                    <ProtocolInfo>$protocolInfo</ProtocolInfo>
+                    <PeerConnectionManager></PeerConnectionManager>
+                    <PeerConnectionID></PeerConnectionID>
+                    <Direction>Output</Direction>
+                    <Status>OK</Status>
+                """.trimIndent()
+                buildSoapResponse("GetCurrentConnectionInfoResponse", service, innerXml)
+            }
+            soapAction.contains("GetCurrentConnectionIDs") || body.contains("GetCurrentConnectionIDs") -> {
+                buildSoapResponse("GetCurrentConnectionIDsResponse", service, "<ConnectionIDs>0</ConnectionIDs>")
+            }
+            soapAction.contains("GetProtocolInfo") || body.contains("GetProtocolInfo") -> {
+                val innerXml = "<Source>$protocolInfo</Source><Sink></Sink>"
+                buildSoapResponse("GetProtocolInfoResponse", service, innerXml)
+            }
+            else -> buildSoapFault(service, UPNP_ERROR_INVALID_ACTION, "Invalid Action")
+        }
     }
 
     private fun buildSoapResponse(actionResponse: String, serviceType: String, content: String): Response {
@@ -267,6 +386,30 @@ class DlnaActionHandler(
         val resp = NanoHTTPD.newFixedLengthResponse(Response.Status.OK, "text/xml; charset=utf-8", soap)
         resp.addHeader("EXT", "")
         return resp
+    }
+
+    /**
+     * UPnP error (SOAP) response. Used instead of a fabricated success envelope so control
+     * points can distinguish "action unsupported" from "action applied".
+     */
+    private fun buildSoapFault(serviceType: String, errorCode: Int, errorDescription: String): Response {
+        Log.w(TAG, "Returning UPnP fault $errorCode ($errorDescription) for $serviceType")
+        val soap = """<?xml version="1.0" encoding="utf-8"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+    <s:Body>
+        <s:Fault>
+            <faultcode>s:Client</faultcode>
+            <faultstring>UPnPError</faultstring>
+            <detail>
+                <UPnPError xmlns="urn:schemas-upnp-org:control-1-0">
+                    <errorCode>$errorCode</errorCode>
+                    <errorDescription>$errorDescription</errorDescription>
+                </UPnPError>
+            </detail>
+        </s:Fault>
+    </s:Body>
+</s:Envelope>"""
+        return NanoHTTPD.newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/xml; charset=utf-8", soap)
     }
 
     private fun extractXmlTagValue(xml: String, tagName: String): String? {
@@ -361,5 +504,8 @@ class DlnaActionHandler(
 
     companion object {
         private const val TAG = "DlnaActionHandler"
+
+        /** UPnP Control error 401: the requested action is not supported by this service. */
+        private const val UPNP_ERROR_INVALID_ACTION = 401
     }
 }

@@ -7,6 +7,7 @@ import android.view.KeyEvent
 import com.bigeyes.tv.config.TvPlayerConfig
 import com.bigeyes.tv.player.command.PlaybackCommand
 import com.bigeyes.tv.player.controller.PlaybackController
+import com.bigeyes.tv.player.model.PlaybackState
 
 /**
  * Centralized TV Remote Controller dispatcher.
@@ -47,6 +48,15 @@ class TvRemoteController(
             return false
         }
 
+        // Buffering / loading guard: only the BACK key may leave the player so the user
+        // cannot trigger episode switches or seeks while the stream has no data.
+        if (isPlaybackLocked()) {
+            if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE) {
+                callback.showExitConfirmDialog()
+            }
+            return true
+        }
+
         // Global Media Keys: Directly invoke PlaybackController commands
         when (keyCode) {
             KeyEvent.KEYCODE_MEDIA_NEXT -> {
@@ -80,11 +90,11 @@ class TvRemoteController(
                 return true
             }
             KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
-                controller.dispatch(PlaybackCommand.SeekForward(15000L))
+                controller.dispatch(PlaybackCommand.SeekForward(TvPlayerConfig.QuickSeek.FORWARD_STEP_MS))
                 return true
             }
             KeyEvent.KEYCODE_MEDIA_REWIND -> {
-                controller.dispatch(PlaybackCommand.SeekBackward(15000L))
+                controller.dispatch(PlaybackCommand.SeekBackward(TvPlayerConfig.QuickSeek.REWIND_STEP_MS))
                 return true
             }
         }
@@ -198,6 +208,9 @@ class TvRemoteController(
         if (callback.isDialogShowing()) {
             return false
         }
+        if (isPlaybackLocked()) {
+            return true
+        }
         if (!callback.isPlayerVisible() && !callback.isOverlayVisible()) {
             return false
         }
@@ -247,6 +260,14 @@ class TvRemoteController(
     fun cleanup() {
         pendingSpeedHoldRunnable?.let { mainHandler.removeCallbacks(it) }
         pendingSpeedHoldRunnable = null
+    }
+
+    /** True while the stream is loading/buffering and remote input must be locked. */
+    private fun isPlaybackLocked(): Boolean {
+        return when (controller.session.value.playbackState) {
+            PlaybackState.LOADING, PlaybackState.BUFFERING -> true
+            else -> false
+        }
     }
 
     companion object {

@@ -13,6 +13,20 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- Guards the exported PlaybackCommandReceiver so only signed/documented senders
+         (the BigEyes phone app) can drive playback. protectionLevel=normal so the
+         companion app picks it up automatically via <uses-permission>. -->
+    <permission
+        android:name="com.bigeyes.tv.permission.RECEIVE_PLAYBACK_COMMAND"
+        android:label="Send playback commands to BigEyesTV"
+        android:protectionLevel="normal" />
+
+    <!-- Android 11+ package visibility: required for PackageManager.getPackageInfo()
+         lookups on the BigEyes companion app (status feedback broadcast gating). -->
+    <queries>
+        <package android:name="com.bigeyes.app" />
+    </queries>
+
     <!-- Android TV features -->
     <uses-feature
         android:name="android.software.leanback"
@@ -77,7 +91,8 @@
         <receiver
             android:name=".playback.PlaybackCommandReceiver"
             android:enabled="true"
-            android:exported="true">
+            android:exported="true"
+            android:permission="com.bigeyes.tv.permission.RECEIVE_PLAYBACK_COMMAND">
             <intent-filter>
                 <action android:name="com.bigeyes.tv.action.NEXT" />
                 <action android:name="com.bigeyes.tv.action.PREVIOUS" />

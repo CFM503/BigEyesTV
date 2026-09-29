@@ -11,15 +11,15 @@ import java.util.UUID
  * Manages persistent Device ID for AirPlay (MAC-format) and UDN for DLNA/UPnP.
  * Ensures the identifiers remain consistent across app restarts so clients don't see duplicate devices.
  */
-class DeviceIdManager(private val context: Context) {
+class DeviceIdManager(private val context: Context) : DeviceIdentity {
 
     private val prefs: SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    val deviceName: String
+    override val deviceName: String
         get() = prefs.getString(KEY_DEVICE_NAME, DEFAULT_DEVICE_NAME) ?: DEFAULT_DEVICE_NAME
 
-    val deviceId: String
+    override val deviceId: String
         get() {
             var id = prefs.getString(KEY_DEVICE_ID, null)
             if (id.isNullOrBlank()) {
@@ -29,7 +29,7 @@ class DeviceIdManager(private val context: Context) {
             return id
         }
 
-    val udn: String
+    override val udn: String
         get() {
             var u = prefs.getString(KEY_UDN, null)
             if (u.isNullOrBlank()) {
@@ -40,24 +40,31 @@ class DeviceIdManager(private val context: Context) {
         }
 
     private fun generateMacAddress(): String {
-        return try {
-            val androidId = Settings.Secure.getString(
+        val source = try {
+            Settings.Secure.getString(
                 context.contentResolver,
                 Settings.Secure.ANDROID_ID
             ) ?: UUID.randomUUID().toString()
-
-            val md = MessageDigest.getInstance("MD5")
-            val hash = md.digest(androidId.toByteArray(Charsets.UTF_8))
-            // Take 6 bytes to form a standard MAC format
-            val sb = StringBuilder()
-            for (i in 0 until 6) {
-                if (i > 0) sb.append(":")
-                sb.append(String.format(Locale.US, "%02X", hash[i].toInt() and 0xFF))
-            }
-            sb.toString()
         } catch (e: Exception) {
-            "58:55:CA:1A:E2:88"
+            // Never fall back to a shared constant: a fixed MAC would collide on every device.
+            UUID.randomUUID().toString()
         }
+
+        return try {
+            toMacAddress(MessageDigest.getInstance("MD5").digest(source.toByteArray(Charsets.UTF_8)))
+        } catch (e: Exception) {
+            toMacAddress(UUID.randomUUID().toString().toByteArray(Charsets.UTF_8))
+        }
+    }
+
+    /** Formats the first 6 [bytes] as a colon separated MAC address. */
+    private fun toMacAddress(bytes: ByteArray): String {
+        val sb = StringBuilder()
+        for (i in 0 until 6) {
+            if (i > 0) sb.append(":")
+            sb.append(String.format(Locale.US, "%02X", bytes[i].toInt() and 0xFF))
+        }
+        return sb.toString()
     }
 
     companion object {

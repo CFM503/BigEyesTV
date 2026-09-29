@@ -51,6 +51,7 @@ class TvReceiverService : Service(), TvPlayerListener {
         startServers()
 
         TvPlayerManager.getInstance(this).addListener(this)
+        isRunning = true
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -65,9 +66,13 @@ class TvReceiverService : Service(), TvPlayerListener {
 
     override fun onDestroy() {
         Log.i(TAG, "TvReceiverService onDestroy")
+        isRunning = false
         TvPlayerManager.getInstance(this).removeListener(this)
         stopServers()
         releaseLocks()
+        // The service is the long-lived owner of the playback pipeline; tear it down here so
+        // the ExoPlayer instance and its progress/status coroutines do not outlive the server.
+        TvPlayerManager.getInstance(this).release()
         super.onDestroy()
     }
 
@@ -250,6 +255,11 @@ class TvReceiverService : Service(), TvPlayerListener {
         const val ACTION_STOP = "com.bigeyes.tv.action.STOP"
         private const val CHANNEL_ID = "bigeyes_tv_channel"
         private const val NOTIFICATION_ID = 1001
+
+        /** True while the DLNA/AirPlay receiver servers are up. */
+        @Volatile
+        var isRunning: Boolean = false
+            private set
 
         fun start(context: Context) {
             val intent = Intent(context, TvReceiverService::class.java).apply {

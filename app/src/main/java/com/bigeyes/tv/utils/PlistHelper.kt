@@ -12,6 +12,11 @@ data class AirPlayPlayRequest(
     val startPosition: Double = 0.0
 )
 
+data class AirPlayPropertyRequest(
+    /** AirPlay volume in the 0.0..1.0 range, or null when the payload carries no volume. */
+    val volume: Double? = null
+)
+
 object PlistHelper {
 
     /**
@@ -184,5 +189,111 @@ object PlistHelper {
         val durStr = String.format(Locale.US, "%.6f", if (durationSec > 0) durationSec else 0.0)
         val posStr = String.format(Locale.US, "%.6f", if (positionSec > 0) positionSec else 0.0)
         return "duration: $durStr\nposition: $posStr\n"
+    }
+
+    /**
+     * Parse a POST /setProperty body (binary/XML plist or plain text) for supported keys.
+     */
+    fun parsePropertyRequest(body: ByteArray, contentType: String?): AirPlayPropertyRequest? {
+        if (body.isEmpty()) return null
+
+        val isBinaryPlist = body.size >= 8 &&
+                body[0] == 'b'.code.toByte() &&
+                body[1] == 'p'.code.toByte() &&
+                body[2] == 'l'.code.toByte() &&
+                body[3] == 'i'.code.toByte() &&
+                body[4] == 's'.code.toByte() &&
+                body[5] == 't'.code.toByte()
+        val isXmlPlist = contentType?.contains("plist", ignoreCase = true) == true ||
+                String(body.take(64).toByteArray(), Charsets.UTF_8).contains("<plist", ignoreCase = true)
+
+        if (isBinaryPlist || isXmlPlist) {
+            try {
+                val root = PropertyListParser.parse(body)
+                if (root is NSDictionary) {
+                    val volumeObj = root.objectForKey("volume")
+                    val volume = when (volumeObj) {
+                        is NSNumber -> volumeObj.doubleValue()
+                        else -> volumeObj?.toString()?.toDoubleOrNull()
+                    }
+                    if (volume != null) return AirPlayPropertyRequest(volume)
+                }
+            } catch (e: Exception) {
+                // fall through to the plain text parser
+            }
+        }
+
+        try {
+            val text = String(body, Charsets.UTF_8)
+            text.lines().forEach { line ->
+                val colonIdx = line.indexOf(':')
+                if (colonIdx > 0) {
+                    val key = line.substring(0, colonIdx).trim()
+                    val value = line.substring(colonIdx + 1).trim()
+                    if (key.equals("volume", ignoreCase = true)) {
+                        value.toDoubleOrNull()?.let { return AirPlayPropertyRequest(it) }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            // ignore malformed payloads
+        }
+
+        return AirPlayPropertyRequest()
+    }
+
+    /**
+     * Generate XML Plist response for GET /getProperty
+     */
+    fun generatePlaybackPropertiesXml(
+        durationSec: Double,
+        positionSec: Double,
+        isPlaying: Boolean,
+        volume: Double
+    ): String {
+        val rate = if (isPlaying) 1.0 else 0.0
+        val durStr = String.format(Locale.US, "%.6f", if (durationSec > 0) durationSec else 0.0)
+        val posStr = String.format(Locale.US, "%.6f", if (positionSec > 0) positionSec else 0.0)
+        val rateStr = String.format(Locale.US, "%.6f", rate)
+        val volStr = String.format(Locale.US, "%.6f", volume.coerceIn(0.0, 1.0))
+        val playingTag = if (isPlaying) "<true/>" else "<false/>"
+
+        return """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>duration</key>
+	<real>$durStr</real>
+	<key>position</key>
+	<real>$posStr</real>
+	<key>rate</key>
+	<real>$rateStr</real>
+	<key>playbackLikelyToKeepUp</key>
+	$playingTag
+	<key>volume</key>
+	<real>$volStr</real>
+	<key>readyToPlay</key>
+	<true/>
+</dict>
+</plist>"""
+    }
+
+    /**
+     * Generate XML Plist response for GET /slideshow-features.
+     * The TV receiver only handles video, so an empty transition set is advertised.
+     */
+    fun generateSlideshowFeaturesXml(): String {
+        return """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>supportsPhotoCaching</key>
+	<false/>
+	<key>transitions</key>
+	<array/>
+	<key>themes</key>
+	<array/>
+</dict>
+</plist>"""
     }
 }

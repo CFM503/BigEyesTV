@@ -3,7 +3,9 @@ package com.bigeyes.tv.dlna
 import android.content.Context
 import android.net.wifi.WifiManager
 import android.util.Log
+import com.bigeyes.tv.BuildConfig
 import com.bigeyes.tv.utils.DeviceIdManager
+import com.bigeyes.tv.utils.HttpDate
 import com.bigeyes.tv.utils.NetworkUtils
 import java.net.DatagramPacket
 import java.net.InetAddress
@@ -163,10 +165,10 @@ class SsdpServer(
         val usn = if (st == udn) udn else "$udn::$st"
         val response = """HTTP/1.1 200 OK
 CACHE-CONTROL: max-age=1800
-DATE: 
+DATE: ${HttpDate.now()}
 EXT:
 LOCATION: $location
-SERVER: Android/UPnP/1.0 DLNADOC/1.50 BigEyesTV/0.1.0
+SERVER: Android/UPnP/1.0 DLNADOC/1.50 BigEyesTV/${BuildConfig.VERSION_NAME}
 ST: $st
 USN: $usn
 
@@ -201,7 +203,7 @@ CACHE-CONTROL: max-age=1800
 LOCATION: $location
 NT: $nt
 NTS: ssdp:alive
-SERVER: Android/UPnP/1.0 DLNADOC/1.50 BigEyesTV/0.1.0
+SERVER: Android/UPnP/1.0 DLNADOC/1.50 BigEyesTV/${BuildConfig.VERSION_NAME}
 USN: $usn
 
 """.replace("\n", "\r\n")

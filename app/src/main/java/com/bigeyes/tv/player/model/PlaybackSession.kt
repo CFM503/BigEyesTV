@@ -31,7 +31,19 @@ data class PlaybackSession(
     val speed: Float = 1.0f,
     val countdownRemainingSeconds: Int? = null,
     val errorMessage: String? = null,
-    val isLastEpisode: Boolean = false
+    val isLastEpisode: Boolean = false,
+    /**
+     * Human readable reason for the current BUFFERING state. Empty/null means the generic
+     * default copy should be shown. Populated by the engine so auto-retry progress
+     * ("网络不稳定，正在尝试恢复... (1/3)") reaches the UI instead of being dropped.
+     */
+    val playbackHint: String? = null,
+    /** Current automatic network recovery attempt (0 = not retrying). */
+    val retryAttempt: Int = 0,
+    /** Maximum automatic network recovery attempts for the current stall. */
+    val retryMax: Int = 0,
+    /** Latched when automatic recovery was exhausted; cleared when playback recovers. */
+    val isNetworkInterrupted: Boolean = false
 ) : Serializable {
 
     val isPlaying: Boolean

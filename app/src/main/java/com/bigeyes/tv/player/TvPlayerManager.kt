@@ -1,4 +1,4 @@
-package com.bigeyes.tv.player
+﻿package com.bigeyes.tv.player
 
 import android.content.Context
 import android.content.Intent
@@ -11,6 +11,7 @@ import com.bigeyes.tv.player.controller.PlaybackController
 import com.bigeyes.tv.player.model.Episode
 import com.bigeyes.tv.player.model.PlaybackState
 import com.bigeyes.tv.ui.MainActivity
+import com.bigeyes.tv.utils.AudioManagerVolumeController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -23,15 +24,16 @@ import java.util.concurrent.CopyOnWriteArrayList
  * Ensures that existing DLNA, AirPlay, background services, and legacy call-sites
  * remain 100% operational without regression while leveraging the new Episode Queue engine.
  */
-class TvPlayerManager private constructor(private val context: Context) {
+class TvPlayerManager private constructor(private val context: Context) : PlaybackFacade {
 
     val controller: PlaybackController = PlaybackController.getInstance(context)
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val volumeController = AudioManagerVolumeController(context)
     private val listeners = CopyOnWriteArrayList<TvPlayerListener>()
     private val coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     @Volatile
-    var currentUrl: String? = null
+    override var currentUrl: String? = null
         private set
 
     @Volatile
@@ -39,7 +41,7 @@ class TvPlayerManager private constructor(private val context: Context) {
         private set
 
     @Volatile
-    var currentState: PlayerState = PlayerState.IDLE
+    override var currentState: PlayerState = PlayerState.IDLE
         private set
 
     @Volatile
@@ -53,6 +55,7 @@ class TvPlayerManager private constructor(private val context: Context) {
     init {
         // Observe unified PlaybackController session and project into legacy PlayerState
         coroutineScope.launch {
+            var previousSession = controller.session.value
             controller.session.collect { session ->
                 currentUrl = session.currentEpisode?.playUrl
                 val legacyState = when (session.playbackState) {
@@ -68,10 +71,28 @@ class TvPlayerManager private constructor(private val context: Context) {
 
                 val previousState = currentState
                 currentState = legacyState
-                isBuffering = session.isBuffering
+                val nowBuffering = session.isBuffering || session.playbackState == PlaybackState.LOADING
+                val wasBuffering = previousSession.isBuffering ||
+                    previousSession.playbackState == PlaybackState.LOADING
+                isBuffering = nowBuffering
+                bufferingMessage = session.playbackHint.orEmpty()
 
                 if (previousState != legacyState) {
                     listeners.forEach { it.onStateChanged(legacyState) }
+                }
+
+                if (nowBuffering != wasBuffering || session.playbackHint != previousSession.playbackHint) {
+                    listeners.forEach {
+                        it.onBufferingStateChanged(nowBuffering, session.playbackHint.orEmpty())
+                    }
+                }
+
+                if (session.retryAttempt != previousSession.retryAttempt && session.retryAttempt > 0) {
+                    listeners.forEach { it.onNetworkRetry(session.retryAttempt, session.retryMax) }
+                }
+
+                if (session.isNetworkInterrupted && !previousSession.isNetworkInterrupted) {
+                    listeners.forEach { it.onNetworkInterrupted(session.position) }
                 }
 
                 if (session.playbackState == PlaybackState.PLAYING && previousState != PlayerState.READY) {
@@ -81,6 +102,8 @@ class TvPlayerManager private constructor(private val context: Context) {
                 } else if (session.playbackState == PlaybackState.ERROR) {
                     listeners.forEach { it.onError(session.errorMessage ?: "播放出错") }
                 }
+
+                previousSession = session
             }
         }
     }
@@ -101,7 +124,7 @@ class TvPlayerManager private constructor(private val context: Context) {
         listeners.remove(listener)
     }
 
-    fun play(url: String, startPositionMs: Long = 0L, title: String? = null) {
+    override fun play(url: String, startPositionMs: Long, title: String?) {
         Log.i(TAG, "TvPlayerManager.play url=$url, startPositionMs=$startPositionMs, title=$title")
         currentUrl = url
         controller.dispatch(PlaybackCommand.Play(url, startPositionMs, title))
@@ -119,11 +142,11 @@ class TvPlayerManager private constructor(private val context: Context) {
         }
     }
 
-    fun pause() {
+    override fun pause() {
         controller.dispatch(PlaybackCommand.Pause)
     }
 
-    fun resume() {
+    override fun resume() {
         controller.dispatch(PlaybackCommand.Resume)
     }
 
@@ -131,7 +154,7 @@ class TvPlayerManager private constructor(private val context: Context) {
         controller.dispatch(PlaybackCommand.TogglePlayPause)
     }
 
-    fun seekTo(positionMs: Long) {
+    override fun seekTo(positionMs: Long) {
         controller.dispatch(PlaybackCommand.Seek(positionMs))
     }
 
@@ -147,7 +170,7 @@ class TvPlayerManager private constructor(private val context: Context) {
      * Preloads next URL. If an episode queue is present, updates next episode's playUrl;
      * otherwise prepares nextUrl for playback.
      */
-    fun setNextUrl(url: String?) {
+    override fun setNextUrl(url: String?) {
         Log.i(TAG, "TvPlayerManager.setNextUrl: $url")
         nextUrl = url
         if (!url.isNullOrBlank()) {
@@ -174,7 +197,7 @@ class TvPlayerManager private constructor(private val context: Context) {
         }
     }
 
-    fun playNext(): Boolean {
+    override fun playNext(): Boolean {
         if (controller.episodeQueue.hasNext()) {
             controller.dispatch(PlaybackCommand.Next)
             return true
@@ -188,7 +211,7 @@ class TvPlayerManager private constructor(private val context: Context) {
         return false
     }
 
-    fun playPrevious(): Boolean {
+    override fun playPrevious(): Boolean {
         if (controller.episodeQueue.hasPrevious()) {
             controller.dispatch(PlaybackCommand.Previous)
             return true
@@ -197,33 +220,61 @@ class TvPlayerManager private constructor(private val context: Context) {
         return false
     }
 
-    fun stop() {
+    override fun stop() {
         currentUrl = null
         nextUrl = null
         controller.dispatch(PlaybackCommand.Stop)
     }
 
+    /**
+     * Tears down the playback pipeline. Called by [com.bigeyes.tv.service.TvReceiverService]
+     * when the receiver goes away. Singletons are cleared so the next [getInstance] rebuilds
+     * a fresh manager instead of handing out a released one.
+     */
     fun release() {
         coroutineScope.cancel()
         controller.release()
+        INSTANCE = null
     }
 
-    fun isPlaying(): Boolean = controller.playerEngine.isPlaying()
+    override fun isPlaying(): Boolean = controller.playerEngine.isPlaying()
 
-    fun isEnded(): Boolean = controller.playerEngine.isEnded()
+    override fun isEnded(): Boolean = controller.playerEngine.isEnded()
 
-    fun isReady(): Boolean = controller.playerEngine.isReady()
+    override fun isReady(): Boolean = controller.playerEngine.isReady()
 
-    fun getDurationMs(): Long = controller.playerEngine.getDurationMs()
+    override fun getDurationMs(): Long = controller.playerEngine.getDurationMs()
 
-    fun getCurrentPositionMs(): Long = controller.playerEngine.getCurrentPositionMs()
+    override fun getCurrentPositionMs(): Long = controller.playerEngine.getCurrentPositionMs()
+
+    /** Media volume in the AirPlay 0.0..1.0 range, mapped onto the device music stream. */
+    override fun getPlaybackVolume(): Double = volumeController.getVolume() / 100.0
+
+    /** Applies a volume in the AirPlay 0.0..1.0 range. */
+    override fun setPlaybackVolume(volume: Double) {
+        volumeController.setVolume((volume.coerceIn(0.0, 1.0) * 100).toInt())
+    }
+
+    fun setPlaybackVolumePercent(percent: Int) {
+        volumeController.setVolume(percent)
+    }
+
+    fun getPlaybackVolumePercent(): Int = volumeController.getVolume()
+
+    /** Display title of the current track, used when building DLNA DIDL-Lite metadata. */
+    override fun currentTrackTitle(): String {
+        val session = controller.session.value
+        return session.currentEpisode?.episodeTitle
+            ?: session.seriesTitle
+            ?: session.currentEpisode?.seriesTitle
+            ?: ""
+    }
+
+    /** 1-based track number of the current track within the active queue. */
+    override fun currentTrackIndex(): Int = controller.session.value.currentIndex + 1
 
     fun manualRetry() {
         controller.dispatch(PlaybackCommand.Retry)
-    }
-
-    fun cancelAndReturnToStandby() {
-        stop()
     }
 
     companion object {

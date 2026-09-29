@@ -5,6 +5,8 @@ import android.util.Log
 import com.bigeyes.tv.airplay.AirPlayHttpHandler
 import com.bigeyes.tv.dlna.DlnaActionHandler
 import com.bigeyes.tv.player.TvPlayerManager
+import com.bigeyes.tv.utils.AudioManagerVolumeController
+import com.bigeyes.tv.utils.DeviceIdManager
 import fi.iki.elonen.NanoHTTPD
 
 /**
@@ -17,8 +19,10 @@ class TvHttpServer(
     port: Int = 7000
 ) : NanoHTTPD(port) {
 
-    private val airPlayHandler = AirPlayHttpHandler(context, playerManager)
-    private val dlnaHandler = DlnaActionHandler(context, playerManager, port)
+    private val deviceIdentity = DeviceIdManager.getInstance(context)
+    private val volumeController = AudioManagerVolumeController(context)
+    private val airPlayHandler = AirPlayHttpHandler(playerManager, deviceIdentity)
+    private val dlnaHandler = DlnaActionHandler(playerManager, deviceIdentity, volumeController, port)
 
     override fun serve(session: IHTTPSession): Response {
         val uri = session.uri

@@ -2,6 +2,42 @@
 
 本文档记录 `BigEyes-TV` 的所有版本迭代与变更历史。
 
+## [v1.2.1] - 2026-09-29 (跨端联调审计修复：网络中断提示、缓冲期遥控保护、DLNA/AirPlay 协议补全)
+
+### 🌐 网络与缓冲体验 (P1)
+* **缓冲遮罩显示真实原因**：`PlaybackSession` 新增 `playbackHint / retryAttempt / retryMax / isNetworkInterrupted`，由 `ExoPlayerEngine` 的重试事件驱动并经 `TvPlayerManager` 转发到 `MainActivity`；自动重试期间显示「网络不稳定，正在尝试恢复... (x/y)」；
+* **网络中断对话框**：自动重试与手动恢复重试均耗尽后，播放页错误态改为标题「网络连接中断」+「上次播放位置：…」+ 【重新连接】/【返回主页】（复用既有 `layoutPlaybackError`），对应 CHANGELOG v1.0.11 承诺；
+* **缓冲期遥控器保护**：`TvRemoteController.isPlaybackLocked()`（LOADING/BUFFERING）期间只响应返回键并弹出退出确认，快进/快退等键位被吞掉，与承诺一致；
+* **配置化**：进度 ticker 间隔改用 `TvPlayerConfig.Overlay.PROGRESS_UPDATE_INTERVAL_MS`，快进步长改用 `TvPlayerConfig.QuickSeek.FORWARD_STEP_MS / REWIND_STEP_MS`（原为死配置）。
+
+### 📡 DLNA / AirPlay 协议补全 (P1)
+* **RenderingControl / ConnectionManager 分 action 真实分发**：`GetVolume / SetVolume / GetMute / SetMute` 与 `GetProtocolInfo / GetCurrentConnectionIDs / GetCurrentConnectionInfo` 分别实现，不再走占位响应；
+* **未知 SOAP action 返回 UPnP fault**：新增 `buildSoapFault()` 返回 HTTP 500 + `<errorCode>401</errorCode>`（`Invalid Action`），不再伪造 200 成功；
+* **`GetPositionInfo` 返回真值**：`Track` 为 1-based 队列下标、`TrackMetaData` 为转义后的 DIDL-Lite（无 URL 时 `NOT_IMPLEMENTED`）、`TrackURI/RelTime/AbsTime` 取自真实播放状态；
+* **GENA 事件端点**：新增 `/upnp/event` 路由（SUBSCRIBE 回 `SID`/`TIMEOUT`/`Date`）；KDoc 明确注明 NanoHTTPD 2.3.1 `Method` 枚举不含 `SUBSCRIBE/UNSUBSCRIBE`，请求会在解析阶段被拒绝；
+* **设备描述与 SSDP 头**：`modelNumber` 改用 `BuildConfig.VERSION_NAME`（新增 `buildConfig = true`），`DATE` 头改用 RFC7231 格式（新增 `HttpDate`），`SERVER` 头附带版本号；
+* **AirPlay**：`/reverse` 回传 `X-Apple-Session-ID` 与 `Connection: keep-alive`；`/setProperty`、`/getProperty`、`/slideshow-features` 从合并分支拆分为真实端点并统一 plist MIME；
+* **移除硬编码假 MAC**：`DeviceIdManager.generateMacAddress()` 改为 ANDROID_ID → MD5 → UUID 三级回退（抽出 `toMacAddress()`）。
+
+### 🔔 Android 13+ 通知权限 (P1)
+* 声明并运行时申请 `POST_NOTIFICATIONS`（`ensureNotificationPermission()`，一次性询问 + rationale 可再次询问），避免前台服务通知在 Android 13+ 静默丢失。
+
+### 🧹 死代码与假状态清理 (P2)
+* 播放控制条拖动松手后真正提交进度（`startOrUpdateScrub()` 排 `TvPlayerConfig.Scrubbing.COMMIT_DEBOUNCE_DELAY_MS` 防抖）；
+* `TvReceiverService.isRunning` 标志 + `MainActivity.updateServiceBadges()`，状态徽标不再硬编码为「已连接」；
+* `TvPlayerManager.release()` / `PlaybackController.release()` 清除单例，`onDestroy` 释放播放器，`MainActivity.onStart` 重新获取 controller 并重建遥控器；
+* 删除未使用的 `TvPlayerManager.cancelAndReturnToStandby()`。
+
+### ✅ 可测性重构与测试
+* 新增 `PlaybackFacade` / `DeviceIdentity` 接口，`DlnaActionHandler` / `AirPlayHttpHandler` 不再依赖 `Context` 与具体 `TvPlayerManager`，可在纯 JVM 中构造；
+* `DlnaActionHandlerTest` 由「测试局部副本」改为驱动真实 `DlnaActionHandler`（路由、SCPD、SOAP、GENA、fault 401、GetPositionInfo）；
+* `HttpServerIntegrationTest` 改为真实 handler + 真实 socket（AirPlay 全端点、DLNA description/SOAP、curl 流程）；
+* 新增 `AndroidManifestContractTest` 守护组件类名、接收端权限、`<queries>` 与 `POST_NOTIFICATIONS`；
+* 单测由 52 项增至 77 项，全部通过；`release.yml` 新增 `testDebugUnitTest` 步骤；
+* 版本号升级 `versionCode 17 / versionName 1.2.1`（手机端 `MIN_TV_VERSION_CODE = 16` 不受影响）。
+
+---
+
 ## [v1.2.0] - 2026-09-28 (BigEyes 直连投屏全链路：状态回传、播控命令与防盗链请求头)
 
 ### ✨ 跨应用直连投屏 (Direct Cast Protocol)

@@ -1,8 +1,11 @@
 package com.bigeyes.tv.ui
 
+import android.Manifest
 import android.app.ProgressDialog
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -13,8 +16,10 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.SeekBar
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -79,6 +84,8 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
         remoteController = TvRemoteController(controller, this)
         updateManager = UpdateManager(this)
 
+        ensureNotificationPermission()
+
         updateDeviceInfo()
         setupOverlayControls()
         setupEndAndErrorControls()
@@ -86,12 +93,43 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
 
         // Start background receiver service (AirPlay & DLNA)
         TvReceiverService.start(this)
+        // The service is created asynchronously; refresh the badges once it is up.
+        mainHandler.postDelayed({ updateServiceBadges() }, RECEIVER_START_CHECK_DELAY_MS)
 
         // Handle initial intent
         handleIncomingIntent(intent)
 
         // Check for updates asynchronously
         checkAppUpdate()
+    }
+
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) {
+            Log.w(TAG, "POST_NOTIFICATIONS denied: playback status notification will be hidden")
+        }
+    }
+
+    /**
+     * Android 13+ hides the receiver status notification unless POST_NOTIFICATIONS is granted.
+     * Asked once on first launch, then only again while the system still allows re-prompting.
+     */
+    private fun ensureNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+
+        val prefs = getSharedPreferences(PREFS_PERMISSIONS, MODE_PRIVATE)
+        val askedBefore = prefs.getBoolean(KEY_NOTIFICATION_PERMISSION_ASKED, false)
+        val canAskAgain = shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)
+        if (askedBefore && !canAskAgain) return
+
+        prefs.edit().putBoolean(KEY_NOTIFICATION_PERMISSION_ASKED, true).apply()
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -116,9 +154,21 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
         val ip = NetworkUtils.getLocalIpAddress()
         val version = updateManager.getAppVersionName()
         binding.tvDeviceName.text = "设备名称：${deviceIdManager.deviceName}"
-        binding.tvIpAddress.text = "服务地址：http://$ip:${TvReceiverService.SERVER_PORT}"
+        binding.tvIpAddress.text = "地址：http://$ip:${TvReceiverService.SERVER_PORT}"
         binding.tvDeviceId.text = "DeviceID (AirPlay MAC)：${deviceIdManager.deviceId}"
         binding.tvVersion.text = "当前版本：v$version"
+        updateServiceBadges()
+    }
+
+    /** Reflects the real receiver state instead of a hard-coded "在线" label. */
+    private fun updateServiceBadges() {
+        val running = TvReceiverService.isRunning
+        val suffix = if (running) "在线" else "离线"
+        val background = if (running) BADGE_ONLINE_COLOR else BADGE_OFFLINE_COLOR
+        binding.badgeDlna.text = "DLNA: $suffix"
+        binding.badgeAirPlay.text = "AirPlay: $suffix"
+        binding.badgeDlna.setBackgroundColor(background)
+        binding.badgeAirPlay.setBackgroundColor(background)
     }
 
     private fun observePlaybackSession() {
@@ -180,7 +230,8 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
 
                 if (session.playbackState == PlaybackState.BUFFERING || session.playbackState == PlaybackState.LOADING) {
                     binding.bufferingOverlay.visibility = View.VISIBLE
-                    binding.tvBufferingMessage.text = if (session.playbackState == PlaybackState.LOADING) "正在加载视频..." else "正在缓冲..."
+                    binding.tvBufferingMessage.text = session.playbackHint
+                        ?: if (session.playbackState == PlaybackState.LOADING) "正在加载视频..." else "正在缓冲..."
                 } else {
                     binding.bufferingOverlay.visibility = View.GONE
                 }
@@ -214,8 +265,14 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
                 binding.layoutPlaybackEnd.visibility = View.GONE
 
                 val epNum = session.currentEpisode?.episodeNumber ?: (session.currentIndex + 1)
-                binding.tvErrorTitle.text = "第 ${epNum} 集播放失败"
-                binding.tvErrorMessage.text = session.errorMessage ?: "视频地址加载失败，请重试"
+                if (session.isNetworkInterrupted) {
+                    binding.tvErrorTitle.text = "网络连接中断"
+                    binding.tvErrorMessage.text =
+                        "上次播放位置：${formatSecondsToTime(session.position / 1000)}"
+                } else {
+                    binding.tvErrorTitle.text = "第 ${epNum} 集播放失败"
+                    binding.tvErrorMessage.text = session.errorMessage ?: "视频地址加载失败，请重试"
+                }
 
                 binding.btnErrorPrevious.visibility = if (queue.hasPrevious()) View.VISIBLE else View.GONE
                 binding.btnErrorNext.visibility = if (queue.hasNext()) View.VISIBLE else View.GONE
@@ -530,6 +587,12 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
         binding.tvScrubDeltaTime.text = "($sign${formatSecondsToTime(Math.abs(deltaSec))})"
         binding.layoutScrubPreview.visibility = View.VISIBLE
 
+        // Safety net: commit when the key stream stalls, so a lost KEY_UP can never leave
+        // the scrub pending forever. Key up still commits immediately.
+        val pendingCommit = Runnable { commitScrub() }
+        commitScrubRunnable = pendingCommit
+        mainHandler.postDelayed(pendingCommit, TvPlayerConfig.Scrubbing.COMMIT_DEBOUNCE_DELAY_MS)
+
         resetOverlayHideTimer()
     }
 
@@ -729,6 +792,12 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
 
     override fun onStart() {
         super.onStart()
+        // The receiver service may have released the pipeline; re-acquire a live controller.
+        val live = PlaybackController.getInstance(this)
+        if (live !== controller) {
+            controller = live
+            remoteController = TvRemoteController(controller, this)
+        }
         controller.attachPlayerView(binding.playerView)
     }
 
@@ -760,5 +829,10 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
 
     companion object {
         private const val TAG = "MainActivity"
+        private const val PREFS_PERMISSIONS = "bigeyes_tv_permissions"
+        private const val KEY_NOTIFICATION_PERMISSION_ASKED = "post_notifications_asked"
+        private const val BADGE_ONLINE_COLOR = 0xFF2E7D32.toInt()
+        private const val BADGE_OFFLINE_COLOR = 0xFF757575.toInt()
+        private const val RECEIVER_START_CHECK_DELAY_MS = 500L
     }
 }

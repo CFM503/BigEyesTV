@@ -213,6 +213,10 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
                 autoRetryCount++
                 val message = "网络不稳定，正在尝试恢复... ($autoRetryCount/${TvPlayerConfig.Buffering.MAX_AUTO_RETRIES})"
                 isBuffering = true
+                listener?.onNetworkRetry(
+                    autoRetryCount,
+                    TvPlayerConfig.Buffering.MAX_AUTO_RETRIES
+                )
                 listener?.onBufferingStateChanged(true, message)
 
                 autoRetryRunnable = Runnable {
@@ -225,6 +229,7 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
             } else {
                 isBuffering = true
                 val message = "网络连接中断"
+                listener?.onNetworkInterrupted(lastKnownPositionMs)
                 listener?.onBufferingStateChanged(true, message)
                 notifyError(message)
             }
@@ -433,6 +438,7 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
             activeUrl = null
             cancelRecovery()
             cancelBufferingTimeout()
+            listener?.onNetworkInterrupted(lastKnownPositionMs)
             notifyError("Playback failed after recovery attempts")
             Log.e(TAG, "Recovery exhausted for $url")
             return

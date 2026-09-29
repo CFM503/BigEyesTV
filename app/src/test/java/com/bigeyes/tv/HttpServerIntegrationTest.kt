@@ -1,36 +1,43 @@
-package com.bigeyes.tv
+﻿package com.bigeyes.tv
 
-import com.bigeyes.tv.utils.PlistHelper
-import com.dd.plist.NSDictionary
-import com.dd.plist.NSNumber
-import com.dd.plist.NSString
-import com.dd.plist.PropertyListParser
+import com.bigeyes.tv.airplay.AirPlayHttpHandler
+import com.bigeyes.tv.dlna.DlnaActionHandler
+import com.bigeyes.tv.fakes.FakeDeviceIdentity
+import com.bigeyes.tv.fakes.FakePlayback
+import com.bigeyes.tv.fakes.FakeVolumeController
 import fi.iki.elonen.NanoHTTPD
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
-import java.io.ByteArrayOutputStream
-import java.io.InputStream
-import java.io.OutputStream
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
-import java.util.Locale
 
 /**
- * Standalone integration test running NanoHTTPD with AirPlay logic
- * and testing HTTP requests with real socket connections.
+ * Runs the *real* [AirPlayHttpHandler] and [DlnaActionHandler] behind a real NanoHTTPD socket so
+ * the routed HTTP contract is verified end to end instead of against a local copy of the logic.
  */
 class HttpServerIntegrationTest {
 
-    private var server: TestAirPlayServer? = null
+    private var server: RealHandlerServer? = null
+    private lateinit var player: FakePlayback
+    private lateinit var identity: FakeDeviceIdentity
+    private lateinit var volume: FakeVolumeController
     private val testPort = 17000
 
     @Before
     fun setUp() {
-        server = TestAirPlayServer(testPort).apply {
+        player = FakePlayback()
+        identity = FakeDeviceIdentity()
+        volume = FakeVolumeController(percent = 40, mutedState = false)
+        server = RealHandlerServer(
+            port = testPort,
+            player = player,
+            identity = identity,
+            volume = volume
+        ).apply {
             start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
         }
     }
@@ -41,287 +48,291 @@ class HttpServerIntegrationTest {
         server = null
     }
 
+    private fun open(path: String, method: String): HttpURLConnection {
+        val conn = URL("http://127.0.0.1:$testPort$path").openConnection() as HttpURLConnection
+        conn.requestMethod = method
+        return conn
+    }
+
+    private fun HttpURLConnection.body(): String =
+        (if (responseCode in 200..399) inputStream else errorStream)
+            .readBytes().toString(Charsets.UTF_8)
+
+    /**
+     * Writes a fixed-length POST body. NanoHTTPD 2.3.1 cannot decode chunked request bodies, so
+     * the length must be declared up front instead of letting [HttpURLConnection] choose.
+     */
+    private fun post(
+        path: String,
+        body: ByteArray,
+        contentType: String,
+        headers: Map<String, String> = emptyMap()
+    ): HttpURLConnection {
+        val conn = open(path, "POST")
+        conn.doOutput = true
+        conn.setFixedLengthStreamingMode(body.size)
+        conn.setRequestProperty("Content-Type", contentType)
+        headers.forEach { (key, value) -> conn.setRequestProperty(key, value) }
+        conn.outputStream.use { it.write(body) }
+        return conn
+    }
+
+    // ----------------------------------------------------------------- AirPlay
+
     @Test
     fun testGetServerInfo() {
-        val conn = URL("http://127.0.0.1:$testPort/server-info").openConnection() as HttpURLConnection
-        conn.requestMethod = "GET"
-        conn.connect()
-
+        val conn = open("/server-info", "GET")
         assertEquals(200, conn.responseCode)
         assertEquals("text/x-apple-plist+xml", conn.contentType)
-        val body = conn.inputStream.readBytes().toString(Charsets.UTF_8)
+        val body = conn.body()
         assertTrue("Must contain deviceid", body.contains("<key>deviceid</key>"))
-        assertTrue("Must contain features 7", body.contains("<key>features</key>\n\t<integer>7</integer>"))
-        assertTrue("Must contain AppleTV2,1", body.contains("<key>model</key>\n\t<string>AppleTV2,1</string>"))
+        assertTrue("Must advertise the fake device id", body.contains(identity.deviceId))
+        assertTrue("Must contain AppleTV2,1", body.contains("<string>AppleTV2,1</string>"))
     }
 
     @Test
     fun testPostPlayWithBinaryPlist() {
-        val dict = NSDictionary()
-        dict.put("Content-Location", NSString("http://192.168.1.50:8765/stream/master.m3u8"))
-        dict.put("Start-Position", NSNumber(15.2))
+        val dict = com.dd.plist.NSDictionary()
+        dict.put("Content-Location", com.dd.plist.NSString("http://192.168.1.50:8765/stream/master.m3u8"))
+        dict.put("Start-Position", com.dd.plist.NSNumber(15.0))
         val binaryBytes = com.dd.plist.BinaryPropertyListWriter.writeToArray(dict)
 
-        val conn = URL("http://127.0.0.1:$testPort/play").openConnection() as HttpURLConnection
-        conn.requestMethod = "POST"
-        conn.doOutput = true
-        conn.setRequestProperty("Content-Type", "application/x-apple-binary-plist")
-        conn.setRequestProperty("Content-Length", binaryBytes.size.toString())
-
-        conn.outputStream.use { it.write(binaryBytes) }
+        val conn = post(
+            path = "/play",
+            body = binaryBytes,
+            contentType = "application/x-apple-binary-plist"
+        )
 
         assertEquals(200, conn.responseCode)
-        assertEquals("http://192.168.1.50:8765/stream/master.m3u8", server?.lastPlayedUrl)
-        assertEquals(15.2, server?.lastStartPosition ?: 0.0, 0.01)
+        assertEquals(
+            "play:http://192.168.1.50:8765/stream/master.m3u8:15000:",
+            player.calls.single()
+        )
     }
 
     @Test
     fun testPostPlayWithPlainText() {
-        val textBody = "Content-Location: http://cdn.test.com/sample.mp4\nStart-Position: 0.0\n"
-        val bytes = textBody.toByteArray(Charsets.UTF_8)
+        val bytes = "Content-Location: http://cdn.test.com/sample.mp4\nStart-Position: 0.0\n"
+            .toByteArray(Charsets.UTF_8)
 
-        val conn = URL("http://127.0.0.1:$testPort/play").openConnection() as HttpURLConnection
-        conn.requestMethod = "POST"
-        conn.doOutput = true
-        conn.setRequestProperty("Content-Type", "text/parameters")
-        conn.outputStream.use { it.write(bytes) }
+        val conn = post(path = "/play", body = bytes, contentType = "text/parameters")
 
         assertEquals(200, conn.responseCode)
-        assertEquals("http://cdn.test.com/sample.mp4", server?.lastPlayedUrl)
+        assertEquals("play:http://cdn.test.com/sample.mp4:0:", player.calls.single())
+    }
+
+    @Test
+    fun testPostPlayWithInvalidPayloadIs400() {
+        val conn = post(path = "/play", body = ByteArray(4), contentType = "application/x-apple-binary-plist")
+
+        assertEquals(400, conn.responseCode)
+        assertTrue(player.calls.isEmpty())
     }
 
     @Test
     fun testGetPlaybackInfo() {
-        server?.mockDurationSec = 3600.0
-        server?.mockPositionSec = 125.0
-        server?.mockIsPlaying = true
+        player.durationMillis = 3_600_000L
+        player.positionMs = 125_000L
+        player.playing = true
 
-        val conn = URL("http://127.0.0.1:$testPort/playback-info").openConnection() as HttpURLConnection
-        conn.requestMethod = "GET"
-        conn.connect()
-
+        val conn = open("/playback-info", "GET")
         assertEquals(200, conn.responseCode)
-        val body = conn.inputStream.readBytes().toString(Charsets.UTF_8)
-        assertTrue("Must contain duration", body.contains("<key>duration</key>"))
-        assertTrue("Must contain position", body.contains("<key>position</key>"))
-        assertTrue("Must contain rate 1.0", body.contains("<key>rate</key>\n\t<real>1.000000</real>"))
+        assertEquals("text/x-apple-plist+xml", conn.contentType)
+        val body = conn.body()
+        assertTrue(body.contains("<key>duration</key>"))
+        assertTrue(body.contains("<key>position</key>"))
+        assertTrue(body.contains("<key>rate</key>"))
+        assertTrue(body.contains("<real>1.000000</real>"))
     }
 
     @Test
     fun testPostRatePauseAndResume() {
-        // Test Pause (value=0.0)
-        var conn = URL("http://127.0.0.1:$testPort/rate?value=0.000000").openConnection() as HttpURLConnection
-        conn.requestMethod = "POST"
+        var conn = open("/rate?value=0.000000", "POST")
         assertEquals(200, conn.responseCode)
-        assertEquals(false, server?.mockIsPlaying)
+        assertEquals(listOf("pause"), player.calls)
 
-        // Test Resume (value=1.0)
-        conn = URL("http://127.0.0.1:$testPort/rate?value=1.000000").openConnection() as HttpURLConnection
-        conn.requestMethod = "POST"
+        conn = open("/rate?value=1.000000", "POST")
         assertEquals(200, conn.responseCode)
-        assertEquals(true, server?.mockIsPlaying)
+        assertEquals(listOf("pause", "resume"), player.calls)
     }
 
     @Test
     fun testPostAndGetScrub() {
-        // Test POST /scrub
-        var conn = URL("http://127.0.0.1:$testPort/scrub?position=150.500000").openConnection() as HttpURLConnection
-        conn.requestMethod = "POST"
+        var conn = open("/scrub?position=150.500000", "POST")
         assertEquals(200, conn.responseCode)
-        assertEquals(150.5, server?.mockPositionSec ?: 0.0, 0.01)
+        assertEquals(listOf("seek:150500"), player.calls)
 
-        // Test GET /scrub
-        conn = URL("http://127.0.0.1:$testPort/scrub").openConnection() as HttpURLConnection
-        conn.requestMethod = "GET"
+        player.positionMs = 150_500L
+        conn = open("/scrub", "GET")
         assertEquals(200, conn.responseCode)
-        val scrubText = conn.inputStream.readBytes().toString(Charsets.UTF_8)
-        assertTrue("Must contain position: 150.5", scrubText.contains("position: 150.500000"))
+        assertEquals("text/parameters", conn.contentType)
+        assertTrue(conn.body().contains("position: 150.500000"))
     }
 
     @Test
     fun testPostStop() {
-        val conn = URL("http://127.0.0.1:$testPort/stop").openConnection() as HttpURLConnection
-        conn.requestMethod = "POST"
+        val conn = open("/stop", "POST")
         assertEquals(200, conn.responseCode)
-        assertEquals(true, server?.stopCalled)
+        assertEquals(listOf("stop"), player.calls)
+    }
+
+    @Test
+    fun testReverseChannelEchoesSessionId() {
+        val conn = open("/reverse", "POST")
+        conn.setRequestProperty("X-Apple-Session-ID", "session-abc")
+        assertEquals(200, conn.responseCode)
+        assertEquals("session-abc", conn.getHeaderField("X-Apple-Session-ID"))
+        assertEquals("keep-alive", conn.getHeaderField("Connection"))
+    }
+
+    @Test
+    fun testSetPropertyAppliesVolumeAndGetPropertyReadsItBack() {
+        val dict = com.dd.plist.NSDictionary()
+        dict.put("volume", com.dd.plist.NSNumber(0.25))
+        val bytes = com.dd.plist.BinaryPropertyListWriter.writeToArray(dict)
+
+        var conn = post(path = "/setProperty", body = bytes, contentType = "application/x-apple-binary-plist")
+        assertEquals(200, conn.responseCode)
+        assertEquals(listOf("setVolume:0.25"), player.calls)
+
+        conn = open("/getProperty", "GET")
+        assertEquals(200, conn.responseCode)
+        assertEquals("text/x-apple-plist+xml", conn.contentType)
+        assertTrue(conn.body().contains("<key>volume</key>"))
+    }
+
+    @Test
+    fun testSlideshowFeaturesIsHonestAboutCapabilities() {
+        val conn = open("/slideshow-features", "GET")
+        assertEquals(200, conn.responseCode)
+        assertEquals("text/x-apple-plist+xml", conn.contentType)
+        val body = conn.body()
+        assertTrue(body.contains("<key>supportsPhotoCaching</key>"))
+        assertTrue(body.contains("<key>transitions</key>"))
+        assertTrue(body.contains("<array/>"))
+    }
+
+    // -------------------------------------------------------------------- DLNA
+
+    @Test
+    fun testDlnaDescriptionOverSocket() {
+        val conn = open("/description.xml", "GET")
+        assertEquals(200, conn.responseCode)
+        val body = conn.body()
+        assertTrue(body.contains("<modelNumber>"))
+        assertTrue(body.contains("<UDN>${identity.udn}</UDN>"))
+        assertTrue(body.contains("/upnp/control/renderingcontrol"))
+    }
+
+    @Test
+    fun testDlnaGetVolumeOverSocket() {
+        volume.percent = 61
+        val soap = """<?xml version="1.0" encoding="utf-8"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+    <s:Body><u:GetVolume xmlns:u="urn:schemas-upnp-org:service:RenderingControl:1">
+        <InstanceID>0</InstanceID><Channel>Master</Channel>
+    </u:GetVolume></s:Body>
+</s:Envelope>"""
+
+        val conn = post(
+            path = "/upnp/control/renderingcontrol",
+            body = soap.toByteArray(Charsets.UTF_8),
+            contentType = "text/xml; charset=\"utf-8\"",
+            headers = mapOf(
+                "SOAPAction" to "\"urn:schemas-upnp-org:service:RenderingControl:1#GetVolume\""
+            )
+        )
+
+        assertEquals(200, conn.responseCode)
+        assertTrue(conn.body().contains("<CurrentVolume>61</CurrentVolume>"))
+    }
+
+    @Test
+    fun testDlnaUnknownActionOverSocketIsUpnpFault() {
+        val soap = """<?xml version="1.0" encoding="utf-8"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+    <s:Body><u:Browse xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">
+        <InstanceID>0</InstanceID>
+    </u:Browse></s:Body>
+</s:Envelope>"""
+
+        val conn = post(
+            path = "/upnp/control/avtransport",
+            body = soap.toByteArray(Charsets.UTF_8),
+            contentType = "text/xml; charset=\"utf-8\"",
+            headers = mapOf(
+                "SOAPAction" to "\"urn:schemas-upnp-org:service:AVTransport:1#Browse\""
+            )
+        )
+
+        assertEquals(500, conn.responseCode)
+        assertTrue(conn.body().contains("<errorCode>401</errorCode>"))
+    }
+
+    @Test
+    fun testUnknownRouteIs404() {
+        assertEquals(404, open("/definitely-not-a-route", "GET").responseCode)
     }
 
     @Test
     fun testActualCurlCommandFlow() {
-        // Ensure sample_play.bplist exists
-        val dict = NSDictionary()
-        dict.put("Content-Location", NSString("http://192.168.1.188:8765/stream/cctv1.m3u8"))
-        dict.put("Start-Position", NSNumber(0.0))
+        val dict = com.dd.plist.NSDictionary()
+        dict.put("Content-Location", com.dd.plist.NSString("http://192.168.1.188:8765/stream/cctv1.m3u8"))
+        dict.put("Start-Position", com.dd.plist.NSNumber(0.0))
         val bplistBytes = com.dd.plist.BinaryPropertyListWriter.writeToArray(dict)
-        val bplistFile = java.io.File("sample_play.bplist")
+        val bplistFile = File("build/tmp/sample_play.bplist")
+        bplistFile.parentFile?.mkdirs()
         bplistFile.writeBytes(bplistBytes)
 
         fun runCurl(args: List<String>): String {
             val cmd = mutableListOf("curl.exe")
             cmd.addAll(args)
-            val proc = ProcessBuilder(cmd)
-                .redirectErrorStream(true)
-                .start()
+            val proc = ProcessBuilder(cmd).redirectErrorStream(true).start()
             val output = proc.inputStream.bufferedReader().readText()
             proc.waitFor()
-            println("=== CURL CMD: ${cmd.joinToString(" ")} ===")
-            println(output)
             return output
         }
 
-        // 1. curl /server-info
         val infoOutput = runCurl(listOf("-s", "-i", "http://127.0.0.1:$testPort/server-info"))
         assertTrue(infoOutput.contains("HTTP/1.1 200 OK"))
         assertTrue(infoOutput.contains("text/x-apple-plist+xml"))
-        assertTrue(infoOutput.contains("<key>deviceid</key>"))
 
-        // 2. curl POST /play (binary plist)
-        val playOutput = runCurl(listOf(
-            "-s", "-i", "-X", "POST",
-            "-H", "Content-Type: application/x-apple-binary-plist",
-            "--data-binary", "@${bplistFile.absolutePath}",
-            "http://127.0.0.1:$testPort/play"
-        ))
+        val playOutput = runCurl(
+            listOf(
+                "-s", "-i", "-X", "POST",
+                "-H", "Content-Type: application/x-apple-binary-plist",
+                "--data-binary", "@${bplistFile.absolutePath}",
+                "http://127.0.0.1:$testPort/play"
+            )
+        )
         assertTrue(playOutput.contains("HTTP/1.1 200 OK"))
-        assertEquals("http://192.168.1.188:8765/stream/cctv1.m3u8", server?.lastPlayedUrl)
+        assertTrue(player.calls.any { it.startsWith("play:http://192.168.1.188:8765/stream/cctv1.m3u8") })
 
-        // 3. curl /playback-info
-        val playbackOutput = runCurl(listOf("-s", "-i", "http://127.0.0.1:$testPort/playback-info"))
-        assertTrue(playbackOutput.contains("HTTP/1.1 200 OK"))
-        assertTrue(playbackOutput.contains("<key>duration</key>"))
+        val scrubOutput = runCurl(listOf("-s", "-i", "-X", "POST", "http://127.0.0.1:$testPort/scrub?position=60.000000"))
+        assertTrue(scrubOutput.contains("HTTP/1.1 200 OK"))
+        assertTrue(player.calls.contains("seek:60000"))
 
-        // 4. curl POST /rate (pause & resume)
-        val pauseOutput = runCurl(listOf("-s", "-i", "-X", "POST", "http://127.0.0.1:$testPort/rate?value=0.000000"))
-        assertTrue(pauseOutput.contains("HTTP/1.1 200 OK"))
-        assertEquals(false, server?.mockIsPlaying)
-
-        val resumeOutput = runCurl(listOf("-s", "-i", "-X", "POST", "http://127.0.0.1:$testPort/rate?value=1.000000"))
-        assertTrue(resumeOutput.contains("HTTP/1.1 200 OK"))
-        assertEquals(true, server?.mockIsPlaying)
-
-        // 5. curl POST /scrub & GET /scrub
-        val scrubSetOutput = runCurl(listOf("-s", "-i", "-X", "POST", "http://127.0.0.1:$testPort/scrub?position=60.000000"))
-        assertTrue(scrubSetOutput.contains("HTTP/1.1 200 OK"))
-        assertEquals(60.0, server?.mockPositionSec ?: 0.0, 0.01)
-
-        val scrubGetOutput = runCurl(listOf("-s", "-i", "http://127.0.0.1:$testPort/scrub"))
-        assertTrue(scrubGetOutput.contains("HTTP/1.1 200 OK"))
-        assertTrue(scrubGetOutput.contains("position: 60.000000"))
-
-        // 6. curl POST /stop
         val stopOutput = runCurl(listOf("-s", "-i", "-X", "POST", "http://127.0.0.1:$testPort/stop"))
         assertTrue(stopOutput.contains("HTTP/1.1 200 OK"))
-        assertEquals(true, server?.stopCalled)
+        assertTrue(player.calls.contains("stop"))
     }
 
-    class TestAirPlayServer(port: Int) : NanoHTTPD(port) {
-        var lastPlayedUrl: String? = null
-        var lastStartPosition: Double? = null
-        var mockDurationSec = 3600.0
-        var mockPositionSec = 0.0
-        var mockIsPlaying = false
-        var stopCalled = false
+    /** Mirrors [com.bigeyes.tv.server.TvHttpServer]'s routing against the real handlers. */
+    class RealHandlerServer(
+        port: Int,
+        player: FakePlayback,
+        identity: FakeDeviceIdentity,
+        volume: FakeVolumeController
+    ) : NanoHTTPD(port) {
+
+        private val airPlay = AirPlayHttpHandler(player, identity)
+        private val dlna = DlnaActionHandler(player, identity, volume, port)
 
         override fun serve(session: IHTTPSession): Response {
             val uri = session.uri
-            val method = session.method
-
-            return when (uri) {
-                "/server-info" -> {
-                    val xml = PlistHelper.generateServerInfoXml("58:55:CA:1A:E2:88")
-                    val resp = newFixedLengthResponse(Response.Status.OK, "text/x-apple-plist+xml", xml)
-                    resp.addHeader("Server", "AirTunes/130.14")
-                    resp
-                }
-                "/play" -> {
-                    var bytes: ByteArray? = null
-                    val lenStr = session.headers["content-length"]
-                    val len = lenStr?.toIntOrNull() ?: 0
-                    if (len > 0) {
-                        try {
-                            val buffer = ByteArray(len)
-                            var totalRead = 0
-                            while (totalRead < len) {
-                                val r = session.inputStream.read(buffer, totalRead, len - totalRead)
-                                if (r == -1) break
-                                totalRead += r
-                            }
-                            if (totalRead > 0) {
-                                bytes = buffer.copyOf(totalRead)
-                            }
-                        } catch (e: Exception) {}
-                    }
-
-                    if (bytes == null || bytes.isEmpty()) {
-                        val files = HashMap<String, String>()
-                        try { session.parseBody(files) } catch (e: Exception) {}
-                        for ((_, value) in files) {
-                            if (!value.isNullOrBlank()) {
-                                val tempFile = java.io.File(value)
-                                if (tempFile.exists() && tempFile.isFile) {
-                                    bytes = tempFile.readBytes()
-                                    if (bytes.isNotEmpty()) break
-                                }
-                            }
-                        }
-                        if (bytes == null || bytes.isEmpty()) {
-                            val postData = files["content"] ?: files["postData"] ?: ""
-                            bytes = postData.toByteArray(Charsets.UTF_8)
-                        }
-                    }
-
-                    val req = PlistHelper.parsePlayRequest(bytes ?: ByteArray(0), session.headers["content-type"])
-                    if (req != null) {
-                        lastPlayedUrl = req.contentLocation
-                        lastStartPosition = req.startPosition
-                        mockIsPlaying = true
-                        val resp = newFixedLengthResponse(Response.Status.OK, MIME_PLAINTEXT, "")
-                        resp.addHeader("Server", "AirTunes/130.14")
-                        resp
-                    } else {
-                        newFixedLengthResponse(Response.Status.BAD_REQUEST, MIME_PLAINTEXT, "Bad Request")
-                    }
-                }
-                "/playback-info" -> {
-                    val xml = PlistHelper.generatePlaybackInfoXml(mockDurationSec, mockPositionSec, mockIsPlaying, true)
-                    val resp = newFixedLengthResponse(Response.Status.OK, "text/x-apple-plist+xml", xml)
-                    resp.addHeader("Server", "AirTunes/130.14")
-                    resp
-                }
-                "/rate" -> {
-                    val valStr = session.parms["value"] ?: "1.0"
-                    val v = valStr.toDoubleOrNull() ?: 1.0
-                    mockIsPlaying = (v != 0.0)
-                    val resp = newFixedLengthResponse(Response.Status.OK, MIME_PLAINTEXT, "")
-                    resp.addHeader("Server", "AirTunes/130.14")
-                    resp
-                }
-                "/scrub" -> {
-                    if (method == Method.GET) {
-                        val text = PlistHelper.generateScrubText(mockDurationSec, mockPositionSec)
-                        val resp = newFixedLengthResponse(Response.Status.OK, "text/parameters", text)
-                        resp.addHeader("Server", "AirTunes/130.14")
-                        resp
-                    } else {
-                        val posStr = session.parms["position"] ?: "0.0"
-                        mockPositionSec = posStr.toDoubleOrNull() ?: 0.0
-                        val resp = newFixedLengthResponse(Response.Status.OK, MIME_PLAINTEXT, "")
-                        resp.addHeader("Server", "AirTunes/130.14")
-                        resp
-                    }
-                }
-                "/stop" -> {
-                    stopCalled = true
-                    mockIsPlaying = false
-                    val resp = newFixedLengthResponse(Response.Status.OK, MIME_PLAINTEXT, "")
-                    resp.addHeader("Server", "AirTunes/130.14")
-                    resp
-                }
-                "/reverse" -> {
-                    val resp = newFixedLengthResponse(Response.Status.OK, MIME_PLAINTEXT, "")
-                    resp.addHeader("Server", "AirTunes/130.14")
-                    resp
-                }
+            return when {
+                airPlay.canHandle(uri) -> airPlay.handleRequest(session)
+                dlna.canHandle(uri) -> dlna.handleRequest(session)
                 else -> newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Not Found")
             }
         }

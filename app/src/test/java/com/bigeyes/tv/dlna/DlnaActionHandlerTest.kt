@@ -1,155 +1,357 @@
-package com.bigeyes.tv.dlna
+﻿package com.bigeyes.tv.dlna
 
+import com.bigeyes.tv.BuildConfig
 import com.bigeyes.tv.MockSession
-import com.bigeyes.tv.player.PlayerState
-import com.bigeyes.tv.player.TvPlayerManager
+import com.bigeyes.tv.fakes.FakeDeviceIdentity
+import com.bigeyes.tv.fakes.FakePlayback
+import com.bigeyes.tv.fakes.FakeVolumeController
 import fi.iki.elonen.NanoHTTPD
+import fi.iki.elonen.NanoHTTPD.Response
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
-import java.io.ByteArrayOutputStream
 
+/**
+ * Drives the *real* [DlnaActionHandler] instead of a local copy of its logic, so regressions in
+ * routing, SOAP serialization and device description actually fail the build.
+ */
 class DlnaActionHandlerTest {
 
+    private lateinit var player: FakePlayback
+    private lateinit var identity: FakeDeviceIdentity
+    private lateinit var volume: FakeVolumeController
+    private lateinit var handler: DlnaActionHandler
+
+    @Before
+    fun setUp() {
+        player = FakePlayback()
+        identity = FakeDeviceIdentity()
+        volume = FakeVolumeController(percent = 40, mutedState = false)
+        handler = DlnaActionHandler(player, identity, volume, port = 7000)
+    }
+
+    private fun body(response: Response): String =
+        response.data.readBytes().toString(Charsets.UTF_8)
+
+    private fun soapSession(uri: String, soapAction: String, soapBody: String): MockSession {
+        val bytes = soapBody.toByteArray(Charsets.UTF_8)
+        return MockSession(
+            uri = uri,
+            method = NanoHTTPD.Method.POST,
+            headers = mapOf(
+                "content-length" to bytes.size.toString(),
+                "soapaction" to "\"$soapAction\""
+            ),
+            body = bytes
+        )
+    }
+
+    private fun soapBody(action: String, service: String, args: String = "") =
+        """<?xml version="1.0" encoding="utf-8"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+    <s:Body>
+        <u:$action xmlns:u="urn:schemas-upnp-org:service:$service:1">
+            <InstanceID>0</InstanceID>
+            $args
+        </u:$action>
+    </s:Body>
+</s:Envelope>"""
+
+    private fun get(uri: String, headers: Map<String, String> = emptyMap()) =
+        MockSession(uri, NanoHTTPD.Method.GET, headers)
+
+    // ---------------------------------------------------------------- routing
+
     @Test
-    fun testAvTransportScpdContainsNextAndSetNext() {
-        val session = MockSession("/avtransport.xml", NanoHTTPD.Method.GET)
-        // Testing SCPD generation directly or via handler if mock context available
-        val xml = """<?xml version="1.0" encoding="utf-8"?>
-<scpd xmlns="urn:schemas-upnp-org:service-1-0">
-    <specVersion><major>1</major><minor>0</minor></specVersion>
-    <actionList>
-        <action><name>SetAVTransportURI</name></action>
-        <action><name>SetNextAVTransportURI</name></action>
-        <action><name>Play</name></action>
-        <action><name>Pause</name></action>
-        <action><name>Seek</name></action>
-        <action><name>Stop</name></action>
-        <action><name>Next</name></action>
-        <action><name>Previous</name></action>
-        <action><name>GetPositionInfo</name></action>
-        <action><name>GetTransportInfo</name></action>
-    </actionList>
-</scpd>"""
-        assertTrue(xml.contains("<action><name>SetNextAVTransportURI</name></action>"))
-        assertTrue(xml.contains("<action><name>Next</name></action>"))
-        assertTrue(xml.contains("<action><name>Previous</name></action>"))
+    fun testCanHandleCoversEveryAdvertisedEndpoint() {
+        assertTrue(handler.canHandle("/description.xml"))
+        assertTrue(handler.canHandle("/avtransport.xml"))
+        assertTrue(handler.canHandle("/renderingcontrol.xml"))
+        assertTrue(handler.canHandle("/connectionmanager.xml"))
+        assertTrue(handler.canHandle("/upnp/control/avtransport"))
+        assertTrue(handler.canHandle("/upnp/control/renderingcontrol"))
+        assertTrue(handler.canHandle("/upnp/control/connectionmanager"))
+        assertTrue(handler.canHandle("/upnp/event/avtransport"))
+        assertFalse(handler.canHandle("/server-info"))
+        assertFalse(handler.canHandle("/index.html"))
     }
 
     @Test
-    fun testParseSetNextAVTransportURI() {
-        val soapBody = """
-            <?xml version="1.0" encoding="utf-8"?>
-            <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
-                <s:Body>
-                    <u:SetNextAVTransportURI xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">
-                        <InstanceID>0</InstanceID>
-                        <NextURI>http://192.168.1.50:8765/stream/ep2/index.m3u8</NextURI>
-                        <NextURIMetaData></NextURIMetaData>
-                    </u:SetNextAVTransportURI>
-                </s:Body>
-            </s:Envelope>
-        """.trimIndent()
+    fun testUnknownRouteIs404() {
+        val resp = handler.handleRequest(get("/nope"))
+        assertEquals(404, resp.status.requestStatus)
+    }
 
-        val uriRegex = Regex("<NextURI>(.*?)</NextURI>", RegexOption.DOT_MATCHES_ALL)
-        val match = uriRegex.find(soapBody)
-        val nextStreamUrl = match?.groupValues?.get(1)?.trim() ?: ""
+    // ------------------------------------------------------- device description
 
-        assertEquals("http://192.168.1.50:8765/stream/ep2/index.m3u8", nextStreamUrl)
+    @Test
+    fun testDescriptionUsesIdentityAndAppVersion() {
+        val resp = handler.handleRequest(get("/description.xml"))
+        val xml = body(resp)
+
+        assertEquals(200, resp.status.requestStatus)
+        assertTrue(xml.contains("<friendlyName>${identity.deviceName}</friendlyName>"))
+        assertTrue(xml.contains("<UDN>${identity.udn}</UDN>"))
+        assertTrue(xml.contains("<serialNumber>${identity.deviceId}</serialNumber>"))
+        assertTrue(xml.contains("<modelNumber>${BuildConfig.VERSION_NAME}</modelNumber>"))
+        assertTrue(xml.contains("urn:schemas-upnp-org:device:MediaRenderer:1"))
+        assertTrue(xml.contains("<eventSubURL>/upnp/event/avtransport</eventSubURL>"))
     }
 
     @Test
-    fun testTransportStateEndedIsStopped() {
-        // Simulating the state logic
-        fun resolveState(isPlaying: Boolean, isEnded: Boolean, isIdle: Boolean, isReady: Boolean, currentUrl: String?): String {
-            return when {
-                isPlaying -> "PLAYING"
-                isEnded || isIdle -> "STOPPED"
-                currentUrl != null && isReady -> "PAUSED_PLAYBACK"
-                else -> "STOPPED"
-            }
-        }
+    fun testScpdFilesDeclareTheirActions() {
+        assertTrue(body(handler.handleRequest(get("/avtransport.xml")))
+            .contains("<action><name>SetNextAVTransportURI</name></action>"))
+        assertTrue(body(handler.handleRequest(get("/avtransport.xml")))
+            .contains("<action><name>GetPositionInfo</name></action>"))
 
-        assertEquals("PLAYING", resolveState(isPlaying = true, isEnded = false, isIdle = false, isReady = true, currentUrl = "http://test.com"))
-        assertEquals("PAUSED_PLAYBACK", resolveState(isPlaying = false, isEnded = false, isIdle = false, isReady = true, currentUrl = "http://test.com"))
-        assertEquals("STOPPED", resolveState(isPlaying = false, isEnded = true, isIdle = false, isReady = false, currentUrl = "http://test.com"))
-        assertEquals("STOPPED", resolveState(isPlaying = false, isEnded = false, isIdle = true, isReady = false, currentUrl = "http://test.com"))
-        assertEquals("STOPPED", resolveState(isPlaying = false, isEnded = false, isIdle = false, isReady = false, currentUrl = null))
+        val rcpd = body(handler.handleRequest(get("/renderingcontrol.xml")))
+        assertTrue(rcpd.contains("<action><name>GetVolume</name></action>"))
+        assertTrue(rcpd.contains("<action><name>SetMute</name></action>"))
+
+        val cmd = body(handler.handleRequest(get("/connectionmanager.xml")))
+        assertTrue(cmd.contains("<action><name>GetProtocolInfo</name></action>"))
+    }
+
+    // ------------------------------------------------------------ GENA endpoint
+
+    @Test
+    fun testEventSubscriptionEndpointAnswersGetWith405() {
+        val resp = handler.handleRequest(get("/upnp/event/avtransport"))
+        assertEquals(405, resp.status.requestStatus)
+        assertTrue(body(resp).contains("SUBSCRIBE"))
     }
 
     @Test
-    fun testXmlTagValueExtractionWithNamespace() {
-        fun extractXmlTagValue(xml: String, tagName: String): String? {
-            val regex = Regex("<(?:[a-zA-Z0-9_]+:)?$tagName(?:\\s[^>]*)?>(.*?)</(?:[a-zA-Z0-9_]+:)?$tagName>", RegexOption.DOT_MATCHES_ALL)
-            return regex.find(xml)?.groupValues?.get(1)?.trim()
-        }
+    fun testEventSubscriptionRejectsMethodsNanoHttpdAcceptsButGenaDoesNot() {
+        // NanoHTTPD's Method enum has no SUBSCRIBE/UNSUBSCRIBE, so those requests are rejected by
+        // the parser before reaching the handler; HEAD is the closest reachable proxy.
+        val resp = handler.handleRequest(
+            MockSession("/upnp/event/avtransport", NanoHTTPD.Method.HEAD)
+        )
+        assertEquals(400, resp.status.requestStatus)
+    }
 
-        val plainXml = "<CurrentURI>http://example.com/video.mp4</CurrentURI>"
-        val nsXml = "<u:CurrentURI>http://example.com/video.mp4</u:CurrentURI>"
-        val attrXml = "<CurrentURI xmlns:dt=\"string\">http://example.com/video.mp4</CurrentURI>"
+    // ------------------------------------------------------ RenderingControl
 
-        assertEquals("http://example.com/video.mp4", extractXmlTagValue(plainXml, "CurrentURI"))
-        assertEquals("http://example.com/video.mp4", extractXmlTagValue(nsXml, "CurrentURI"))
-        assertEquals("http://example.com/video.mp4", extractXmlTagValue(attrXml, "CurrentURI"))
+    @Test
+    fun testGetVolumeReturnsFakeVolume() {
+        volume.percent = 55
+        val resp = handler.handleRequest(
+            soapSession(
+                "/upnp/control/renderingcontrol",
+                "urn:schemas-upnp-org:service:RenderingControl:1#GetVolume",
+                soapBody("GetVolume", "RenderingControl", "<Channel>Master</Channel>")
+            )
+        )
+        assertEquals(200, resp.status.requestStatus)
+        assertTrue(body(resp).contains("<CurrentVolume>55</CurrentVolume>"))
     }
 
     @Test
-    fun testCleanXmlValueCdataAndEntities() {
-        fun cleanXmlValue(value: String): String {
-            var cleaned = value.trim()
-            if (cleaned.startsWith("<![CDATA[", ignoreCase = true) && cleaned.endsWith("]]>")) {
-                cleaned = cleaned.substring(9, cleaned.length - 3).trim()
-            }
-            return cleaned.replace("&amp;", "&")
-                .replace("&lt;", "<")
-                .replace("&gt;", ">")
-                .replace("&quot;", "\"")
-                .replace("&apos;", "'")
-                .trim()
-        }
-
-        val cdataUrl = "<![CDATA[http://example.com/video.mp4?token=abc&amp;id=123]]>"
-        assertEquals("http://example.com/video.mp4?token=abc&id=123", cleanXmlValue(cdataUrl))
-
-        val escapedUrl = "http://example.com/video.mp4?a=1&amp;b=2"
-        assertEquals("http://example.com/video.mp4?a=1&b=2", cleanXmlValue(escapedUrl))
+    fun testSetVolumeWritesThroughToVolumeController() {
+        val resp = handler.handleRequest(
+            soapSession(
+                "/upnp/control/renderingcontrol",
+                "urn:schemas-upnp-org:service:RenderingControl:1#SetVolume",
+                soapBody(
+                    "SetVolume",
+                    "RenderingControl",
+                    "<Channel>Master</Channel><DesiredVolume>73</DesiredVolume>"
+                )
+            )
+        )
+        assertEquals(200, resp.status.requestStatus)
+        assertEquals(73, volume.percent)
     }
 
     @Test
-    fun testActionRoutingOrder() {
-        // Ensure SetNextAVTransportURI is distinguished from SetAVTransportURI
-        val setNextAction = "\"urn:schemas-upnp-org:service:AVTransport:1#SetNextAVTransportURI\""
-        val setAction = "\"urn:schemas-upnp-org:service:AVTransport:1#SetAVTransportURI\""
+    fun testSetMuteAndGetMuteRoundTrip() {
+        handler.handleRequest(
+            soapSession(
+                "/upnp/control/renderingcontrol",
+                "urn:schemas-upnp-org:service:RenderingControl:1#SetMute",
+                soapBody(
+                    "SetMute",
+                    "RenderingControl",
+                    "<Channel>Master</Channel><DesiredMute>1</DesiredMute>"
+                )
+            )
+        )
+        assertTrue(volume.mutedState)
 
-        fun route(soapAction: String): String {
-            return when {
-                soapAction.contains("SetNextAVTransportURI") -> "NEXT"
-                soapAction.contains("SetAVTransportURI") -> "SET"
-                else -> "OTHER"
-            }
-        }
-
-        assertEquals("NEXT", route(setNextAction))
-        assertEquals("SET", route(setAction))
+        val resp = handler.handleRequest(
+            soapSession(
+                "/upnp/control/renderingcontrol",
+                "urn:schemas-upnp-org:service:RenderingControl:1#GetMute",
+                soapBody("GetMute", "RenderingControl", "<Channel>Master</Channel>")
+            )
+        )
+        assertTrue(body(resp).contains("<CurrentMute>1</CurrentMute>"))
     }
 
     @Test
-    fun testExtractTitleFromMetadata() {
-        fun extractXmlTagValue(xml: String, tagName: String): String? {
-            val regex = Regex("<(?:[a-zA-Z0-9_]+:)?$tagName(?:\\s[^>]*)?>(.*?)</(?:[a-zA-Z0-9_]+:)?$tagName>", RegexOption.DOT_MATCHES_ALL)
-            return regex.find(xml)?.groupValues?.get(1)?.trim()
-        }
+    fun testUnknownRenderingControlActionReturnsUpnpFault401() {
+        val resp = handler.handleRequest(
+            soapSession(
+                "/upnp/control/renderingcontrol",
+                "urn:schemas-upnp-org:service:RenderingControl:1#Browse",
+                soapBody("Browse", "RenderingControl")
+            )
+        )
+        val xml = body(resp)
+        assertEquals(500, resp.status.requestStatus)
+        assertTrue(xml.contains("<errorCode>401</errorCode>"))
+        assertTrue(xml.contains("<errorDescription>Invalid Action</errorDescription>"))
+        assertTrue(xml.contains("<faultstring>UPnPError</faultstring>"))
+        assertEquals(40, volume.percent)
+    }
 
-        val metadata = """
-            <DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/">
-                <item id="0" parentID="-1" restricted="1">
-                    <dc:title>庆余年 第二季 第05集</dc:title>
-                    <res>http://192.168.1.100:8899/stream/123/index.m3u8</res>
-                </item>
-            </DIDL-Lite>
-        """.trimIndent()
+    @Test
+    fun testUnknownConnectionManagerActionReturnsUpnpFault401() {
+        val resp = handler.handleRequest(
+            soapSession(
+                "/upnp/control/connectionmanager",
+                "urn:schemas-upnp-org:service:ConnectionManager:1#PrepareForConnection",
+                soapBody("PrepareForConnection", "ConnectionManager")
+            )
+        )
+        assertEquals(500, resp.status.requestStatus)
+        assertTrue(body(resp).contains("<errorCode>401</errorCode>"))
+    }
 
-        val title = extractXmlTagValue(metadata, "dc:title") ?: extractXmlTagValue(metadata, "title")
-        assertEquals("庆余年 第二季 第05集", title)
+    @Test
+    fun testGetProtocolInfoAdvertisesSupportedMimeTypes() {
+        val resp = handler.handleRequest(
+            soapSession(
+                "/upnp/control/connectionmanager",
+                "urn:schemas-upnp-org:service:ConnectionManager:1#GetProtocolInfo",
+                soapBody("GetProtocolInfo", "ConnectionManager")
+            )
+        )
+        val xml = body(resp)
+        assertEquals(200, resp.status.requestStatus)
+        assertTrue(xml.contains("application/vnd.apple.mpegurl"))
+        assertTrue(xml.contains("<Sink></Sink>"))
+    }
+
+    // ------------------------------------------------------------- AVTransport
+
+    @Test
+    fun testSetAvTransportUriStartsPlayback() {
+        val resp = handler.handleRequest(
+            soapSession(
+                "/upnp/control/avtransport",
+                "urn:schemas-upnp-org:service:AVTransport:1#SetAVTransportURI",
+                soapBody(
+                    "SetAVTransportURI",
+                    "AVTransport",
+                    "<CurrentURI>http://192.168.1.50:8765/stream/ep1.m3u8</CurrentURI>" +
+                        "<CurrentURIMetaData></CurrentURIMetaData>"
+                )
+            )
+        )
+        assertEquals(200, resp.status.requestStatus)
+        assertEquals(
+            "play:http://192.168.1.50:8765/stream/ep1.m3u8:0:",
+            player.calls.single()
+        )
+    }
+
+    @Test
+    fun testSetNextAvTransportUriFeedsQueue() {
+        handler.handleRequest(
+            soapSession(
+                "/upnp/control/avtransport",
+                "urn:schemas-upnp-org:service:AVTransport:1#SetNextAVTransportURI",
+                soapBody(
+                    "SetNextAVTransportURI",
+                    "AVTransport",
+                    "<NextURI>http://192.168.1.50:8765/stream/ep2.m3u8</NextURI>"
+                )
+            )
+        )
+        assertEquals(listOf("next:http://192.168.1.50:8765/stream/ep2.m3u8"), player.calls)
+    }
+
+    @Test
+    fun testTransportControlsDispatchToPlayer() {
+        handler.handleRequest(
+            soapSession(
+                "/upnp/control/avtransport",
+                "urn:schemas-upnp-org:service:AVTransport:1#Pause",
+                soapBody("Pause", "AVTransport")
+            )
+        )
+        handler.handleRequest(
+            soapSession(
+                "/upnp/control/avtransport",
+                "urn:schemas-upnp-org:service:AVTransport:1#Next",
+                soapBody("Next", "AVTransport")
+            )
+        )
+        handler.handleRequest(
+            soapSession(
+                "/upnp/control/avtransport",
+                "urn:schemas-upnp-org:service:AVTransport:1#Seek",
+                soapBody("Seek", "AVTransport", "<Unit>REL_TIME</Unit><Target>00:01:30</Target>")
+            )
+        )
+        assertEquals(listOf("pause", "playNext", "seek:90000"), player.calls)
+    }
+
+    @Test
+    fun testGetPositionInfoReportsRealTrackAndTime() {
+        player.trackTitle = "庆余年 第二季 第05集"
+        player.trackIndex = 5
+        player.durationMillis = 60_000L
+        player.positionMs = 0L
+
+        val resp = handler.handleRequest(
+            soapSession(
+                "/upnp/control/avtransport",
+                "urn:schemas-upnp-org:service:AVTransport:1#GetPositionInfo",
+                soapBody("GetPositionInfo", "AVTransport")
+            )
+        )
+        val xml = body(resp)
+
+        assertEquals(200, resp.status.requestStatus)
+        assertTrue("<Track>5</Track>" in xml)
+        assertTrue("<TrackDuration>00:01:00</TrackDuration>" in xml)
+        assertTrue("NOT_IMPLEMENTED" in xml)
+    }
+
+    @Test
+    fun testGetPositionInfoEmitsDidlLiteWhenUrlPresent() {
+        player.trackTitle = "测试剧集"
+        player.trackIndex = 1
+        handler.handleRequest(
+            soapSession(
+                "/upnp/control/avtransport",
+                "urn:schemas-upnp-org:service:AVTransport:1#SetAVTransportURI",
+                soapBody(
+                    "SetAVTransportURI",
+                    "AVTransport",
+                    "<CurrentURI>http://192.168.1.50/a&amp;b.m3u8</CurrentURI>" +
+                        "<CurrentURIMetaData></CurrentURIMetaData>"
+                )
+            )
+        )
+
+        val xml = body(
+            handler.handleRequest(
+                soapSession(
+                    "/upnp/control/avtransport",
+                    "urn:schemas-upnp-org:service:AVTransport:1#GetPositionInfo",
+                    soapBody("GetPositionInfo", "AVTransport")
+                )
+            )
+        )
+        assertTrue("DIDL-Lite" in xml)
+        assertTrue("测试剧集" in xml)
+        assertTrue("&amp;amp;" in xml)
     }
 }
