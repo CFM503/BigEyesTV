@@ -284,8 +284,14 @@ class HttpServerIntegrationTest {
         bplistFile.parentFile?.mkdirs()
         bplistFile.writeBytes(bplistBytes)
 
+        val curlBin = if (System.getProperty("os.name").startsWith("Windows", true)) {
+            "curl.exe"
+        } else {
+            "curl"
+        }
+
         fun runCurl(args: List<String>): String {
-            val cmd = mutableListOf("curl.exe")
+            val cmd = mutableListOf(curlBin)
             cmd.addAll(args)
             val proc = ProcessBuilder(cmd).redirectErrorStream(true).start()
             val output = proc.inputStream.bufferedReader().readText()
