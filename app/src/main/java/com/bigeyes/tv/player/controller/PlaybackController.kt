@@ -225,12 +225,17 @@ class PlaybackController private constructor(
     }
 
     private fun handlePlayEpisode(index: Int, startPositionMs: Long) {
-        if (!episodeQueue.setCurrentIndex(index)) {
+        if (index !in 0 until episodeQueue.size) {
             Log.w(TAG, "Invalid episode index $index for queue of size ${episodeQueue.size}")
             return
         }
         if (!isSwitchingEpisode.compareAndSet(false, true)) {
             Log.w(TAG, "PlayEpisode ignored: episode switch in progress.")
+            return
+        }
+        if (!episodeQueue.setCurrentIndex(index)) {
+            isSwitchingEpisode.set(false)
+            Log.w(TAG, "Invalid episode index $index for queue of size ${episodeQueue.size}")
             return
         }
         saveCurrentProgressToHistory()

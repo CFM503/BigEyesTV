@@ -57,8 +57,8 @@ class EpisodeListDialog(
 
         val spanCount = if (episodes.size > 8) 6 else 4
         binding.recyclerEpisodes.layoutManager = GridLayoutManager(context, spanCount)
-        val adapter = EpisodeAdapter(episodes, currentIndex) { selectedEp ->
-            controller.dispatch(PlaybackCommand.PlayEpisode(selectedEp.episodeIndex))
+        val adapter = EpisodeAdapter(episodes, currentIndex) { position ->
+            controller.dispatch(PlaybackCommand.PlayEpisode(position))
             dismiss()
         }
         binding.recyclerEpisodes.adapter = adapter
@@ -73,7 +73,7 @@ class EpisodeListDialog(
     private class EpisodeAdapter(
         private val episodes: List<Episode>,
         private val currentIndex: Int,
-        private val onSelect: (Episode) -> Unit
+        private val onSelect: (Int) -> Unit
     ) : RecyclerView.Adapter<EpisodeAdapter.EpisodeViewHolder>() {
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): EpisodeViewHolder {
@@ -103,7 +103,8 @@ class EpisodeListDialog(
             }
 
             holder.itemView.setOnClickListener {
-                onSelect(ep)
+                val pos = holder.bindingAdapterPosition
+                if (pos != RecyclerView.NO_POSITION) onSelect(pos)
             }
         }
 
