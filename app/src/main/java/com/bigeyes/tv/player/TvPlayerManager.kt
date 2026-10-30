@@ -131,7 +131,7 @@ class TvPlayerManager private constructor(private val context: Context) : Playba
         bringActivityToFront()
     }
 
-    fun bringActivityToFront() {
+    override fun bringActivityToFront() {
         try {
             val intent = Intent(context, MainActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
@@ -158,11 +158,11 @@ class TvPlayerManager private constructor(private val context: Context) : Playba
         controller.dispatch(PlaybackCommand.Seek(positionMs))
     }
 
-    fun setPlaybackSpeed(speed: Float) {
+    override fun setPlaybackSpeed(speed: Float) {
         controller.dispatch(PlaybackCommand.SetSpeed(speed))
     }
 
-    fun getPlaybackSpeed(): Float {
+    override fun getPlaybackSpeed(): Float {
         return controller.playerEngine.getPlaybackSpeed()
     }
 
@@ -183,10 +183,10 @@ class TvPlayerManager private constructor(private val context: Context) : Playba
                 val current = queue.current()
                 val nextEp = Episode(
                     seriesId = current?.seriesId ?: "stream_series",
-                    seriesTitle = current?.seriesTitle ?: "杩炵画鎾斁",
+                    seriesTitle = current?.seriesTitle ?: "连续播放",
                     seasonNumber = current?.seasonNumber ?: 1,
                     episodeNumber = (current?.episodeNumber ?: 1) + 1,
-                    episodeTitle = "涓嬩竴闆?,
+                    episodeTitle = "下一集",
                     episodeIndex = queue.size,
                     playUrl = url
                 )
@@ -196,6 +196,34 @@ class TvPlayerManager private constructor(private val context: Context) : Playba
             }
         }
     }
+
+    override fun playQueue(
+        queue: List<Episode>,
+        startIndex: Int,
+        startPositionMs: Long,
+        autoPlayNext: Boolean
+    ) {
+        controller.episodeQueue.setQueue(queue, startIndex)
+        controller.dispatch(PlaybackCommand.SetAutoPlayNext(autoPlayNext))
+        if (queue.isNotEmpty() && startIndex in queue.indices) {
+            val target = queue[startIndex]
+            play(target.playUrl, startPositionMs, target.toDisplayTitle())
+        }
+    }
+
+    override fun playEpisode(index: Int, startPositionMs: Long) {
+        if (index in controller.episodeQueue.episodes.indices) {
+            controller.dispatch(PlaybackCommand.PlayEpisode(index, startPositionMs))
+            bringActivityToFront()
+        }
+    }
+
+    override fun getSeriesId(): String? = controller.session.value.seriesId.takeIf { it.isNotBlank() }
+    override fun getSeriesTitle(): String? = controller.session.value.seriesTitle.takeIf { it.isNotBlank() } ?: currentTrackTitle()
+    override fun getCurrentEpisode(): Episode? = controller.session.value.currentEpisode
+    override fun isBuffering(): Boolean = controller.session.value.playbackState == PlaybackState.BUFFERING || controller.session.value.playbackState == PlaybackState.LOADING
+    override fun isAutoPlayNext(): Boolean = controller.session.value.autoPlayNext
+    override fun getErrorMessage(): String? = controller.session.value.errorMessage
 
     override fun playNext(): Boolean {
         if (controller.episodeQueue.hasNext()) {
