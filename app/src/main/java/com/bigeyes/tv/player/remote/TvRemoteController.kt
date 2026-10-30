@@ -264,10 +264,7 @@ class TvRemoteController(
 
     /** True while the stream is loading/buffering and remote input must be locked. */
     private fun isPlaybackLocked(): Boolean {
-        return when (controller.session.value.playbackState) {
-            PlaybackState.LOADING, PlaybackState.BUFFERING -> true
-            else -> false
-        }
+        return false
     }
 
     companion object {

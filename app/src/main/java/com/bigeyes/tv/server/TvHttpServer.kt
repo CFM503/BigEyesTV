@@ -11,7 +11,7 @@ import fi.iki.elonen.NanoHTTPD
 
 /**
  * Unified NanoHTTPD embedded server for BigEyes-TV.
- * Routes AirPlay and DLNA HTTP requests to their respective handlers on port 7000.
+ * Routes BigEyes Companion REST API, AirPlay and DLNA HTTP requests to their respective handlers on port 7000.
  */
 class TvHttpServer(
     context: Context,
@@ -23,12 +23,16 @@ class TvHttpServer(
     private val volumeController = AudioManagerVolumeController(context)
     private val airPlayHandler = AirPlayHttpHandler(playerManager, deviceIdentity)
     private val dlnaHandler = DlnaActionHandler(playerManager, deviceIdentity, volumeController, port)
+    private val companionHandler = BigEyesCompanionHandler(playerManager, deviceIdentity)
 
     override fun serve(session: IHTTPSession): Response {
         val uri = session.uri
         Log.d(TAG, "Incoming HTTP ${session.method} $uri from ${session.remoteIpAddress}")
 
         return when {
+            companionHandler.canHandle(uri) -> {
+                companionHandler.handleRequest(session)
+            }
             airPlayHandler.canHandle(uri) -> {
                 airPlayHandler.handleRequest(session)
             }

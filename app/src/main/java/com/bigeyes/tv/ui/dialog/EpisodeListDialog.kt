@@ -63,10 +63,17 @@ class EpisodeListDialog(
         }
         binding.recyclerEpisodes.adapter = adapter
 
-        // Focus current episode view after layout
-        binding.recyclerEpisodes.post {
-            val viewHolder = binding.recyclerEpisodes.findViewHolderForAdapterPosition(currentIndex)
-            viewHolder?.itemView?.requestFocus()
+        // Auto-scroll to current episode and focus view safely
+        if (currentIndex in episodes.indices) {
+            binding.recyclerEpisodes.scrollToPosition(currentIndex)
+            binding.recyclerEpisodes.post {
+                val viewHolder = binding.recyclerEpisodes.findViewHolderForAdapterPosition(currentIndex)
+                if (viewHolder != null) {
+                    viewHolder.itemView.requestFocus()
+                } else {
+                    binding.recyclerEpisodes.getChildAt(0)?.requestFocus()
+                }
+            }
         }
     }
 

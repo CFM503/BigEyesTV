@@ -1,4 +1,4 @@
-﻿package com.bigeyes.tv.player
+package com.bigeyes.tv.player
 
 import android.content.Context
 import android.content.Intent
@@ -100,7 +100,7 @@ class TvPlayerManager private constructor(private val context: Context) : Playba
                 } else if (session.playbackState == PlaybackState.STOPPED) {
                     listeners.forEach { it.onPlaybackStopped() }
                 } else if (session.playbackState == PlaybackState.ERROR) {
-                    listeners.forEach { it.onError(session.errorMessage ?: "播放出错") }
+                    listeners.forEach { it.onError(session.errorMessage ?: "鎾斁鍑洪敊") }
                 }
 
                 previousSession = session
@@ -131,7 +131,7 @@ class TvPlayerManager private constructor(private val context: Context) : Playba
         bringActivityToFront()
     }
 
-    private fun bringActivityToFront() {
+    fun bringActivityToFront() {
         try {
             val intent = Intent(context, MainActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
@@ -183,10 +183,10 @@ class TvPlayerManager private constructor(private val context: Context) : Playba
                 val current = queue.current()
                 val nextEp = Episode(
                     seriesId = current?.seriesId ?: "stream_series",
-                    seriesTitle = current?.seriesTitle ?: "连续播放",
+                    seriesTitle = current?.seriesTitle ?: "杩炵画鎾斁",
                     seasonNumber = current?.seasonNumber ?: 1,
                     episodeNumber = (current?.episodeNumber ?: 1) + 1,
-                    episodeTitle = "下一集",
+                    episodeTitle = "涓嬩竴闆?,
                     episodeIndex = queue.size,
                     playUrl = url
                 )

@@ -1,7 +1,9 @@
 package com.bigeyes.tv.player
 
+import com.bigeyes.tv.player.model.Episode
+
 /**
- * Narrow playback surface required by the DLNA / AirPlay HTTP handlers.
+ * Narrow playback surface required by the DLNA / AirPlay / BigEyes Companion HTTP handlers.
  *
  * [TvPlayerManager] implements it; tests substitute a fake so the real protocol handlers can be
  * exercised without an Android [android.content.Context] or an ExoPlayer instance.
@@ -41,4 +43,32 @@ interface PlaybackFacade {
 
     /** 1-based track number of the current track. */
     fun currentTrackIndex(): Int
+
+    // BigEyes LAN Companion API extensions
+    fun playQueue(
+        queue: List<Episode>,
+        startIndex: Int = 0,
+        startPositionMs: Long = 0L,
+        autoPlayNext: Boolean = true
+    ) {
+        if (queue.isNotEmpty() && startIndex in queue.indices) {
+            val ep = queue[startIndex]
+            play(ep.playUrl, startPositionMs, ep.toDisplayTitle())
+        }
+    }
+
+    fun playEpisode(index: Int, startPositionMs: Long = 0L) {
+        seekTo(startPositionMs)
+    }
+
+    fun setPlaybackSpeed(speed: Float) {}
+    fun getPlaybackSpeed(): Float = 1.0f
+
+    fun getSeriesId(): String? = null
+    fun getSeriesTitle(): String? = currentTrackTitle()
+    fun getCurrentEpisode(): Episode? = null
+    fun isBuffering(): Boolean = false
+    fun isAutoPlayNext(): Boolean = true
+    fun getErrorMessage(): String? = null
+    fun bringActivityToFront() {}
 }

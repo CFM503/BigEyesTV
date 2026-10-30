@@ -1,5 +1,6 @@
-﻿package com.bigeyes.tv
+package com.bigeyes.tv
 
+import com.bigeyes.tv.server.BigEyesCompanionHandler
 import com.bigeyes.tv.airplay.AirPlayHttpHandler
 import com.bigeyes.tv.dlna.DlnaActionHandler
 import com.bigeyes.tv.fakes.FakeDeviceIdentity
@@ -269,6 +270,80 @@ class HttpServerIntegrationTest {
         assertTrue(conn.body().contains("<errorCode>401</errorCode>"))
     }
 
+    // --------------------------------------------------------- BigEyes Companion
+
+    @Test
+    fun testCompanionInfo() {
+        val conn = open("/bigeyes/api/info", "GET")
+        assertEquals(200, conn.responseCode)
+        assertEquals("application/json; charset=utf-8", conn.contentType)
+        val body = conn.body()
+        assertTrue("Must contain deviceId", body.contains("\"deviceId\":"))
+        assertTrue("Must contain friendlyName", body.contains("\"friendlyName\":"))
+        assertTrue("Must contain companionProtocolVersion", body.contains("\"companionProtocolVersion\":\"1.0\""))
+    }
+
+    @Test
+    fun testCompanionPlayQueue() {
+        val payload = """
+            {
+              "seriesId": "s_123",
+              "seriesTitle": "BigEyes Test Series",
+              "startIndex": 0,
+              "startPositionMs": 3000,
+              "queue": [
+                {"title": "Episode 1", "url": "http://192.168.1.100:8765/stream/ep1.m3u8"}
+              ],
+              "headers": {
+                "Referer": "https://test.example.com"
+              }
+            }
+        """.trimIndent()
+
+        val conn = post(
+            path = "/bigeyes/api/play",
+            body = payload.toByteArray(Charsets.UTF_8),
+            contentType = "application/json"
+        )
+        assertEquals(200, conn.responseCode)
+        val body = conn.body()
+        assertTrue(body.contains("\"success\":true"))
+        assertTrue(player.calls.any { it.startsWith("playQueue:1 episodes:index 0:3000ms") })
+    }
+
+    @Test
+    fun testCompanionControl() {
+        var conn = post("/bigeyes/api/control", """{"action":"pause"}""".toByteArray(Charsets.UTF_8), "application/json")
+        assertEquals(200, conn.responseCode)
+        assertTrue(player.calls.contains("pause"))
+
+        conn = post("/bigeyes/api/control", """{"action":"resume"}""".toByteArray(Charsets.UTF_8), "application/json")
+        assertEquals(200, conn.responseCode)
+        assertTrue(player.calls.contains("resume"))
+
+        conn = post("/bigeyes/api/control", """{"action":"seek","positionMs":15000}""".toByteArray(Charsets.UTF_8), "application/json")
+        assertEquals(200, conn.responseCode)
+        assertTrue(player.calls.contains("seek:15000"))
+
+        conn = post("/bigeyes/api/control", """{"action":"speed","speed":1.25}""".toByteArray(Charsets.UTF_8), "application/json")
+        assertEquals(200, conn.responseCode)
+        assertTrue(player.calls.contains("speed:1.25"))
+
+        conn = post("/bigeyes/api/control", """{"action":"stop"}""".toByteArray(Charsets.UTF_8), "application/json")
+        assertEquals(200, conn.responseCode)
+        assertTrue(player.calls.contains("stop"))
+    }
+
+    @Test
+    fun testCompanionStatus() {
+        val conn = open("/bigeyes/api/status", "GET")
+        assertEquals(200, conn.responseCode)
+        val body = conn.body()
+        assertTrue(body.contains("\"state\":"))
+        assertTrue(body.contains("\"currentPositionMs\":"))
+        assertTrue(body.contains("\"durationMs\":"))
+    }
+
     @Test
     fun testUnknownRouteIs404() {
         assertEquals(404, open("/definitely-not-a-route", "GET").responseCode)
@@ -331,12 +406,14 @@ class HttpServerIntegrationTest {
         volume: FakeVolumeController
     ) : NanoHTTPD(port) {
 
+        private val companion = BigEyesCompanionHandler(player, identity)
         private val airPlay = AirPlayHttpHandler(player, identity)
         private val dlna = DlnaActionHandler(player, identity, volume, port)
 
         override fun serve(session: IHTTPSession): Response {
             val uri = session.uri
             return when {
+                companion.canHandle(uri) -> companion.handleRequest(session)
                 airPlay.canHandle(uri) -> airPlay.handleRequest(session)
                 dlna.canHandle(uri) -> dlna.handleRequest(session)
                 else -> newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Not Found")

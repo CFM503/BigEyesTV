@@ -1,7 +1,8 @@
-﻿package com.bigeyes.tv.fakes
+package com.bigeyes.tv.fakes
 
 import com.bigeyes.tv.player.PlaybackFacade
 import com.bigeyes.tv.player.PlayerState
+import com.bigeyes.tv.player.model.Episode
 import com.bigeyes.tv.utils.DeviceIdentity
 import com.bigeyes.tv.utils.VolumeController
 
@@ -28,7 +29,7 @@ class FakeVolumeController(
     }
 }
 
-/** Recording [PlaybackFacade] so DLNA/AirPlay protocol handlers can be exercised for real. */
+/** Recording [PlaybackFacade] so DLNA/AirPlay/Companion protocol handlers can be exercised for real. */
 class FakePlayback : PlaybackFacade {
 
     val calls = mutableListOf<String>()
@@ -41,6 +42,8 @@ class FakePlayback : PlaybackFacade {
     var volumeLevel: Double = 1.0
     var trackTitle: String = "Episode 1"
     var trackIndex: Int = 1
+    var speed: Float = 1.0f
+    var queue: List<Episode> = emptyList()
 
     override var currentUrl: String? = null
         private set
@@ -110,4 +113,25 @@ class FakePlayback : PlaybackFacade {
 
     override fun currentTrackTitle(): String = trackTitle
     override fun currentTrackIndex(): Int = trackIndex
+
+    override fun playQueue(
+        queue: List<Episode>,
+        startIndex: Int,
+        startPositionMs: Long,
+        autoPlayNext: Boolean
+    ) {
+        calls += "playQueue:${queue.size}:$startIndex:$startPositionMs"
+        this.queue = queue
+        if (queue.isNotEmpty() && startIndex in queue.indices) {
+            val ep = queue[startIndex]
+            play(ep.playUrl, startPositionMs, ep.toDisplayTitle())
+        }
+    }
+
+    override fun setPlaybackSpeed(speed: Float) {
+        calls += "speed:$speed"
+        this.speed = speed
+    }
+
+    override fun getPlaybackSpeed(): Float = speed
 }

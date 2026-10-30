@@ -2,6 +2,27 @@
 
 本文档记录 `BigEyes-TV` 的所有版本迭代与变更历史。
 
+## [v1.3.0] - 2026-10-30 (BigEyes LAN Companion 伴侣协议 v1.0 与端到端联动体系构建)
+
+### 🚀 伴侣联动协议 (P0)
+* **BigEyes Companion REST API (:7000)**：内置 NanoHTTPD 路由器集成全新伴侣端点，打通跨设备 Wi-Fi 局域网高保真投屏链路：
+  * `GET /bigeyes/api/info`：设备能力协商，输出伴侣协议版本号 `1.0` 与唯一设备标识；
+  * `GET /bigeyes/api/status`：高频状态轮询，提供毫秒级播放进度、剧集索引、缓冲状态与倍速；
+  * `POST /bigeyes/api/play`：完整剧集队列（Queue Handover）下放、断点位置恢复与防盗链请求头（`Referer`、`User-Agent`、`Cookie`）透明透传；
+  * `POST /bigeyes/api/control`：轻量指令通道，覆盖 `pause`、`resume`、`stop`、`next`、`prev`、`seek`、`speed`、`playEpisode`。
+
+### 🛠 播放与架构修复 (P1)
+* **缓冲期遥控死锁修复**：修正 `TvRemoteController.isPlaybackLocked()`，避免视频缓冲加载时物理遥控器按键全量失效；
+* **选集对话框焦点脱焦保护**：优化 `EpisodeListDialog`，在请求获取焦点前确保 RecyclerView 滑动至当前集位置，规避焦点丢失；
+* **临时文件防泄漏**：`DlnaActionHandler.parseBody` 补充 `finally` 垃圾回收逻辑，防止高频投屏 SOAP 报文临时文件撑爆电视存储空间；
+* **播放门面扩展**：`PlaybackFacade` 与 `TvPlayerManager` 补齐 `playQueue`、`setPlaybackSpeed` 等接口规范。
+
+### 🧪 自动化测试
+* `HttpServerIntegrationTest` 覆盖伴侣协议端点全流程回归测试（GET info / POST play / POST control / GET status）；
+* 单测全项通过；`versionCode 20 / versionName 1.3.0`。
+
+---
+
 ## [v1.2.3] - 2026-09-29 (CI 发布链路修复：测试可跨平台执行)
 
 ### 🛠 CI / 发布

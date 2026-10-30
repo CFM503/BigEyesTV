@@ -1,4 +1,4 @@
-﻿package com.bigeyes.tv.dlna
+package com.bigeyes.tv.dlna
 
 import android.util.Log
 import com.bigeyes.tv.BuildConfig
