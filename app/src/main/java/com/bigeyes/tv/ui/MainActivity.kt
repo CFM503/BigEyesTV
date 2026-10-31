@@ -224,10 +224,6 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
         // 7. State Transitions
         when (session.playbackState) {
             PlaybackState.PLAYING, PlaybackState.PAUSED, PlaybackState.BUFFERING, PlaybackState.LOADING -> {
-                exitConfirmDialog?.dismiss()
-                exitConfirmDialog = null
-                episodeListDialog?.dismiss()
-                episodeListDialog = null
                 showPlayer()
                 binding.layoutPlaybackEnd.visibility = View.GONE
                 binding.layoutPlaybackError.visibility = View.GONE
@@ -241,6 +237,10 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
                 }
             }
             PlaybackState.COMPLETED -> {
+                exitConfirmDialog?.dismiss()
+                exitConfirmDialog = null
+                episodeListDialog?.dismiss()
+                episodeListDialog = null
                 hideOverlay()
                 binding.bufferingOverlay.visibility = View.GONE
                 binding.layoutCountdownCard.visibility = View.GONE
@@ -261,6 +261,10 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
                 }
             }
             PlaybackState.ERROR -> {
+                exitConfirmDialog?.dismiss()
+                exitConfirmDialog = null
+                episodeListDialog?.dismiss()
+                episodeListDialog = null
                 hideOverlay()
                 binding.bufferingOverlay.visibility = View.GONE
                 binding.layoutCountdownCard.visibility = View.GONE
@@ -283,6 +287,10 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
                 binding.btnErrorRetry.requestFocus()
             }
             PlaybackState.IDLE, PlaybackState.STOPPED -> {
+                exitConfirmDialog?.dismiss()
+                exitConfirmDialog = null
+                episodeListDialog?.dismiss()
+                episodeListDialog = null
                 hideOverlay()
                 binding.bufferingOverlay.visibility = View.GONE
                 binding.layoutCountdownCard.visibility = View.GONE
@@ -469,6 +477,9 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
     private fun showEpisodeListDialog() {
         if (episodeListDialog?.isShowing == true) return
         val dialog = EpisodeListDialog(this, controller)
+        dialog.setOnDismissListener {
+            episodeListDialog = null
+        }
         episodeListDialog = dialog
         dialog.show()
     }

@@ -2,6 +2,14 @@
 
 本文档记录 `BigEyes-TV` 的所有版本迭代与变更历史。
 
+## [v1.3.3] - 2026-10-31 (修复播放中按返回键退出确认弹窗被秒关问题)
+
+### 🐛 遥控器与弹窗生命周期修复 (P0)
+* **播放进度高频更新导致的弹窗秒关修复**：彻底移除 `MainActivity.renderSessionState` 在 `PLAYING` / `PAUSED` / `BUFFERING` / `LOADING` 状态刷新时对 `exitConfirmDialog` 与 `episodeListDialog` 的粗暴强制关闭逻辑。原逻辑因 ExoPlayer 播放进度每秒高频回调更新，导致用户在播放状态按返回键调出退出确认框（或调出选集列表）时被下一帧进度刷新直接秒关；
+* **弹窗生命周期闭环管理**：将 `exitConfirmDialog` 与 `episodeListDialog` 的销毁时机规范收敛至播放真正终止（`IDLE` / `STOPPED`）、播放完毕（`COMPLETED`）、致命异常（`ERROR`）以及页面销毁（`onDestroy`），同时为 `EpisodeListDialog` 补全 `setOnDismissListener` 引用清理，保证弹窗状态纯净安全。
+
+---
+
 ## [v1.3.2] - 2026-10-31 (手机与TV全量剧集互通联动、选集上下集闭环、TV端待机检查更新按钮)
 
 ### 🚀 选集与上下集全链路互通 (P0)
