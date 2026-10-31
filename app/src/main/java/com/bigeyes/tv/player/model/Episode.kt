@@ -62,16 +62,21 @@ data class Episode(
         private const val serialVersionUID = 1L
 
         fun fromJson(json: JSONObject): Episode {
+            val title = json.optString("episodeTitle").ifBlank { json.optString("title", "") }
+            val url = json.optString("playUrl").ifBlank { json.optString("url", "") }
+            val epIndex = if (json.has("episodeIndex")) json.optInt("episodeIndex") else 0
+            val epNumber = if (json.has("episodeNumber")) json.optInt("episodeNumber") else (epIndex + 1)
+            val dur = if (json.has("duration")) json.optLong("duration") else json.optLong("durationMs", 0L)
             return Episode(
                 seriesId = json.optString("seriesId", "single_series"),
                 seriesTitle = json.optString("seriesTitle", ""),
                 seasonNumber = json.optInt("seasonNumber", 1),
-                episodeNumber = json.optInt("episodeNumber", 1),
-                episodeTitle = json.optString("episodeTitle", ""),
-                episodeIndex = json.optInt("episodeIndex", 0),
-                playUrl = json.optString("playUrl", ""),
+                episodeNumber = epNumber,
+                episodeTitle = title,
+                episodeIndex = epIndex,
+                playUrl = url,
                 thumbnail = json.optString("thumbnail", "").takeIf { it.isNotBlank() },
-                duration = json.optLong("duration", 0L),
+                duration = dur,
                 headers = parseHeaders(json.optJSONObject("headers"))
             )
         }

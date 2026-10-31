@@ -29,7 +29,7 @@ class BigEyesCompanionHandler(
     }
 
     fun canHandle(uri: String): Boolean {
-        return uri.startsWith("/bigeyes/api/")
+        return uri.startsWith("/bigeyes/api/") || uri.startsWith("/bigeyes/api")
     }
 
     fun handleRequest(session: IHTTPSession): Response {
@@ -56,11 +56,14 @@ class BigEyesCompanionHandler(
     private fun handleGetInfo(): Response {
         val json = JSONObject().apply {
             put("code", 200)
+            put("success", true)
             put("app", "BigEyesTV")
             put("versionName", BuildConfig.VERSION_NAME)
             put("versionCode", BuildConfig.VERSION_CODE)
             put("deviceId", deviceIdentity.deviceId)
             put("deviceName", deviceIdentity.deviceName)
+            put("friendlyName", deviceIdentity.deviceName)
+            put("companionProtocolVersion", "1.0")
             put("features", JSONArray().apply {
                 put("queue")
                 put("anti_hotlink")
@@ -88,16 +91,21 @@ class BigEyesCompanionHandler(
         val trackIndex = playerManager.currentTrackIndex()
         val epIndex = (trackIndex - 1).coerceAtLeast(0)
 
+        val posMs = playerManager.getCurrentPositionMs()
+        val durMs = playerManager.getDurationMs()
+
         val json = JSONObject().apply {
             put("code", 200)
+            put("success", true)
             put("state", stateStr)
             put("seriesId", playerManager.getSeriesId() ?: "series")
             put("seriesTitle", playerManager.getSeriesTitle() ?: "")
             put("episodeIndex", epIndex)
             put("episodeNumber", ep?.episodeNumber ?: (epIndex + 1))
             put("episodeTitle", ep?.episodeTitle ?: playerManager.currentTrackTitle())
-            put("positionMs", playerManager.getCurrentPositionMs())
-            put("durationMs", playerManager.getDurationMs())
+            put("positionMs", posMs)
+            put("currentPositionMs", posMs)
+            put("durationMs", durMs)
             put("autoPlayNext", playerManager.isAutoPlayNext())
             put("speed", playerManager.getPlaybackSpeed().toDouble())
             put("isBuffering", playerManager.isBuffering)
@@ -114,19 +122,15 @@ class BigEyesCompanionHandler(
 
         return try {
             val json = JSONObject(bodyStr)
-            val playUrl = json.optString("playUrl")
-            if (playUrl.isBlank()) {
-                return jsonResponse(Response.Status.BAD_REQUEST, 400, "Missing playUrl")
-            }
-
             val seriesId = json.optString("seriesId", "single_series")
             val seriesTitle = json.optString("seriesTitle", "投屏播放")
             val seasonNumber = json.optInt("seasonNumber", 1)
-            val episodeIndex = json.optInt("episodeIndex", 0)
+            val episodeIndex = if (json.has("startIndex")) json.optInt("startIndex", 0) else json.optInt("episodeIndex", 0)
             val episodeNumber = json.optInt("episodeNumber", episodeIndex + 1)
             val episodeTitle = json.optString("episodeTitle", "")
-            val positionMs = json.optLong("positionMs", 0L)
+            val positionMs = if (json.has("startPositionMs")) json.optLong("startPositionMs", 0L) else json.optLong("positionMs", 0L)
             val autoPlayNext = json.optBoolean("autoPlayNext", true)
+            val playUrl = json.optString("playUrl").ifBlank { json.optString("url", "") }
 
             // Anti-hotlink request headers
             val headersMap = mutableMapOf<String, String>()
@@ -145,11 +149,19 @@ class BigEyesCompanionHandler(
             if (queueArray != null && queueArray.length() > 0) {
                 for (i in 0 until queueArray.length()) {
                     val qItem = queueArray.getJSONObject(i)
-                    queueList.add(Episode.fromJson(qItem))
+                    val ep = Episode.fromJson(qItem)
+                    val fixedEp = ep.copy(
+                        seriesId = if (ep.seriesId == "single_series" && seriesId.isNotBlank()) seriesId else ep.seriesId,
+                        seriesTitle = if (ep.seriesTitle.isBlank() && seriesTitle.isNotBlank()) seriesTitle else ep.seriesTitle
+                    )
+                    queueList.add(fixedEp)
                 }
             }
 
             if (queueList.isEmpty()) {
+                if (playUrl.isBlank()) {
+                    return jsonResponse(Response.Status.BAD_REQUEST, 400, "Missing playUrl or queue")
+                }
                 queueList.add(
                     Episode(
                         seriesId = seriesId,
@@ -205,16 +217,16 @@ class BigEyesCompanionHandler(
                 "RESUME" -> playerManager.resume()
                 "STOP" -> playerManager.stop()
                 "NEXT" -> playerManager.playNext()
-                "PREVIOUS" -> playerManager.playPrevious()
+                "PREV", "PREVIOUS" -> playerManager.playPrevious()
                 "SEEK" -> {
                     val pos = json.optLong("positionMs", 0L)
                     playerManager.seekTo(pos)
                 }
-                "SET_SPEED" -> {
+                "SPEED", "SET_SPEED" -> {
                     val speed = json.optDouble("speed", 1.0).toFloat()
                     playerManager.setPlaybackSpeed(speed)
                 }
-                "PLAY_EPISODE" -> {
+                "PLAY_EPISODE", "PLAYEPISODE" -> {
                     val idx = json.optInt("episodeIndex", 0)
                     val pos = json.optLong("positionMs", 0L)
                     playerManager.playEpisode(idx, pos)
@@ -277,6 +289,7 @@ class BigEyesCompanionHandler(
     private fun jsonResponse(status: Response.Status, code: Int, message: String): Response {
         val obj = JSONObject().apply {
             put("code", code)
+            put("success", code in 200..299)
             put("message", message)
         }
         return jsonResponse(status, obj)

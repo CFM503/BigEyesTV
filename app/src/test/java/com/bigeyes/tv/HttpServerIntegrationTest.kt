@@ -359,7 +359,7 @@ class HttpServerIntegrationTest {
         bplistFile.parentFile?.mkdirs()
         bplistFile.writeBytes(bplistBytes)
 
-        val curlBin = if (System.getProperty("os.name").startsWith("Windows", true)) {
+        val curlBin = if (System.getProperty("os.name")?.startsWith("Windows", true) == true) {
             "curl.exe"
         } else {
             "curl"

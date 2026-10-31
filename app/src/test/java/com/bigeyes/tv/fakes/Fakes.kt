@@ -120,7 +120,7 @@ class FakePlayback : PlaybackFacade {
         startPositionMs: Long,
         autoPlayNext: Boolean
     ) {
-        calls += "playQueue:${queue.size}:$startIndex:$startPositionMs"
+        calls += "playQueue:${queue.size} episodes:index $startIndex:${startPositionMs}ms"
         this.queue = queue
         if (queue.isNotEmpty() && startIndex in queue.indices) {
             val ep = queue[startIndex]

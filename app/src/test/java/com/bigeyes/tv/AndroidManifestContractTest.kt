@@ -124,7 +124,7 @@ class AndroidManifestContractTest {
     }
 
     private fun locateManifest(): File {
-        var dir: File? = File(System.getProperty("user.dir")).absoluteFile
+        var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
         while (dir != null) {
             val candidate = File(dir, "src/main/AndroidManifest.xml")
             if (candidate.isFile) return candidate
