@@ -99,6 +99,10 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
         // Handle initial intent
         handleIncomingIntent(intent)
 
+        binding.btnCheckUpdate.setOnClickListener {
+            checkAppUpdate(isManual = true)
+        }
+
         // Check for updates asynchronously
         checkAppUpdate()
     }
@@ -710,11 +714,15 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
         binding.playerView.visibility = View.GONE
         binding.standbyLayout.visibility = View.VISIBLE
         updateDeviceInfo()
+        binding.btnCheckUpdate.requestFocus()
     }
 
     // ==================== Update Checking ====================
 
-    private fun checkAppUpdate() {
+    private fun checkAppUpdate(isManual: Boolean = false) {
+        if (isManual) {
+            Toast.makeText(this, "正在检查更新...", Toast.LENGTH_SHORT).show()
+        }
         updateManager.checkForUpdates(object : UpdateManager.UpdateCheckListener {
             override fun onUpdateAvailable(release: ReleaseInfo) {
                 if (isFinishing || isDestroyed) return
@@ -723,10 +731,20 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
 
             override fun onNoUpdateAvailable() {
                 Log.d(TAG, "Already up to date.")
+                if (isManual && !isFinishing && !isDestroyed) {
+                    runOnUiThread {
+                        Toast.makeText(this@MainActivity, "当前已是最新版本 (v" + updateManager.getAppVersionName() + ")", Toast.LENGTH_SHORT).show()
+                    }
+                }
             }
 
             override fun onError(error: String) {
-                Log.w(TAG, "Update check skipped/failed: $error")
+                Log.w(TAG, "Update check skipped/failed: " + error)
+                if (isManual && !isFinishing && !isDestroyed) {
+                    runOnUiThread {
+                        Toast.makeText(this@MainActivity, "检查更新失败: " + error, Toast.LENGTH_SHORT).show()
+                    }
+                }
             }
         })
     }

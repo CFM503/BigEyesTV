@@ -305,6 +305,31 @@ class PlaybackController private constructor(
         val generationId = completionGuard.nextGeneration()
         Log.i(TAG, "Starting episode: gen=$generationId, ep=${episode.episodeNumber}, url=${episode.playUrl}, pos=$startPositionMs")
 
+        if (episode.playUrl.isBlank()) {
+            Log.i(TAG, "Episode ${episode.episodeNumber} playUrl is blank, waiting for phone to provide play URL...")
+            _session.update {
+                it.copy(
+                    seriesId = episode.seriesId,
+                    seriesTitle = episode.seriesTitle,
+                    currentEpisode = episode,
+                    currentIndex = episodeQueue.currentIndex,
+                    playbackState = PlaybackState.BUFFERING,
+                    position = startPositionMs,
+                    duration = episode.duration,
+                    countdownRemainingSeconds = null,
+                    errorMessage = null,
+                    isLastEpisode = episodeQueue.isLast(),
+                    playbackHint = "正在等待手机端解析视频地址...",
+                    retryAttempt = 0,
+                    retryMax = 0,
+                    isNetworkInterrupted = false
+                )
+            }
+            playerEngine.pause()
+            isSwitchingEpisode.set(false)
+            return
+        }
+
         _session.update {
             it.copy(
                 seriesId = episode.seriesId,

@@ -185,6 +185,9 @@ class BigEyesCompanionHandler(
                         }
                     }
                 }
+                if (episodeIndex in queueList.indices && queueList[episodeIndex].playUrl.isBlank() && playUrl.isNotBlank()) {
+                    queueList[episodeIndex] = queueList[episodeIndex].copy(playUrl = playUrl)
+                }
             }
 
             playerManager.playQueue(
@@ -227,7 +230,7 @@ class BigEyesCompanionHandler(
                     playerManager.setPlaybackSpeed(speed)
                 }
                 "PLAY_EPISODE", "PLAYEPISODE" -> {
-                    val idx = json.optInt("episodeIndex", 0)
+                    val idx = if (json.has("episodeIndex")) json.optInt("episodeIndex") else json.optInt("index", 0)
                     val pos = json.optLong("positionMs", 0L)
                     playerManager.playEpisode(idx, pos)
                 }

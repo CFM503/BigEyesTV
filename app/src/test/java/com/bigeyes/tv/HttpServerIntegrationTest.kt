@@ -332,6 +332,16 @@ class HttpServerIntegrationTest {
         conn = post("/bigeyes/api/control", """{"action":"stop"}""".toByteArray(Charsets.UTF_8), "application/json")
         assertEquals(200, conn.responseCode)
         assertTrue(player.calls.contains("stop"))
+
+        // test playEpisode with episodeIndex
+        conn = post("/bigeyes/api/control", """{"action":"playEpisode","episodeIndex":3,"positionMs":12000}""".toByteArray(Charsets.UTF_8), "application/json")
+        assertEquals(200, conn.responseCode)
+        assertTrue(player.calls.contains("playEpisode:3:12000"))
+
+        // test playEpisode with index (phone format)
+        conn = post("/bigeyes/api/control", """{"action":"playEpisode","index":5,"positionMs":0}""".toByteArray(Charsets.UTF_8), "application/json")
+        assertEquals(200, conn.responseCode)
+        assertTrue(player.calls.contains("playEpisode:5:0"))
     }
 
     @Test

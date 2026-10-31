@@ -98,6 +98,12 @@ class FakePlayback : PlaybackFacade {
         return true
     }
 
+    override fun playEpisode(index: Int, startPositionMs: Long) {
+        calls += "playEpisode:$index:$startPositionMs"
+        this.trackIndex = index
+        this.positionMs = startPositionMs
+    }
+
     override fun getDurationMs(): Long = durationMillis
     override fun getCurrentPositionMs(): Long = positionMs
     override fun isPlaying(): Boolean = playing
