@@ -7,7 +7,6 @@ import android.view.KeyEvent
 import com.bigeyes.tv.config.TvPlayerConfig
 import com.bigeyes.tv.player.command.PlaybackCommand
 import com.bigeyes.tv.player.controller.PlaybackController
-import com.bigeyes.tv.player.model.PlaybackState
 
 /**
  * Centralized TV Remote Controller dispatcher.
@@ -15,16 +14,33 @@ import com.bigeyes.tv.player.model.PlaybackState
  * keyCode conditionals across Activity lifecycle methods.
  */
 class TvRemoteController(
-    private val controller: PlaybackController,
-    private val callback: RemoteCallback
+    private val commandDispatcher: (PlaybackCommand) -> Unit,
+    private val callback: RemoteCallback,
+    private val postDelayedAction: (Runnable, Long) -> Unit = { r, delay ->
+        try {
+            Handler(Looper.getMainLooper()).postDelayed(r, delay)
+        } catch (_: Exception) {}
+    },
+    private val removeAction: (Runnable) -> Unit = { r ->
+        try {
+            Handler(Looper.getMainLooper()).removeCallbacks(r)
+        } catch (_: Exception) {}
+    }
 ) {
+    constructor(controller: PlaybackController, callback: RemoteCallback) : this(
+        commandDispatcher = { controller.dispatch(it) },
+        callback = callback
+    )
 
     interface RemoteCallback {
         fun isOverlayVisible(): Boolean
         fun showOverlay(focusOnSeekBar: Boolean = false)
         fun hideOverlay()
+        fun resetOverlayHideTimer()
         fun isDialogShowing(): Boolean
         fun showExitConfirmDialog()
+        fun isEndOrErrorVisible(): Boolean
+        fun handleEndOrErrorBack(): Boolean
         fun isHoldingSpeed(): Boolean
         fun activateHoldingSpeed(speed: Float, hudText: String)
         fun deactivateHoldingSpeed()
@@ -40,8 +56,15 @@ class TvRemoteController(
         fun isPlayerVisible(): Boolean
     }
 
-    private val mainHandler = Handler(Looper.getMainLooper())
     private var pendingSpeedHoldRunnable: Runnable? = null
+    private var speedHoldWatchdogRunnable: Runnable? = null
+
+    private fun isConfirmKey(keyCode: Int): Boolean {
+        return keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
+                keyCode == KeyEvent.KEYCODE_ENTER ||
+                keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER ||
+                keyCode == KeyEvent.KEYCODE_BUTTON_A
+    }
 
     fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (callback.isDialogShowing()) {
@@ -61,40 +84,40 @@ class TvRemoteController(
         when (keyCode) {
             KeyEvent.KEYCODE_MEDIA_NEXT -> {
                 Log.i(TAG, "MEDIA_NEXT intercepted -> dispatching PlaybackCommand.Next")
-                controller.dispatch(PlaybackCommand.Next)
+                commandDispatcher(PlaybackCommand.Next)
                 return true
             }
             KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
                 Log.i(TAG, "MEDIA_PREVIOUS intercepted -> dispatching PlaybackCommand.Previous")
-                controller.dispatch(PlaybackCommand.Previous)
+                commandDispatcher(PlaybackCommand.Previous)
                 return true
             }
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
                 Log.i(TAG, "MEDIA_PLAY_PAUSE intercepted -> dispatching TogglePlayPause")
-                controller.dispatch(PlaybackCommand.TogglePlayPause)
+                commandDispatcher(PlaybackCommand.TogglePlayPause)
                 return true
             }
             KeyEvent.KEYCODE_MEDIA_PLAY -> {
                 Log.i(TAG, "MEDIA_PLAY intercepted -> dispatching Resume")
-                controller.dispatch(PlaybackCommand.Resume)
+                commandDispatcher(PlaybackCommand.Resume)
                 return true
             }
             KeyEvent.KEYCODE_MEDIA_PAUSE -> {
                 Log.i(TAG, "MEDIA_PAUSE intercepted -> dispatching Pause")
-                controller.dispatch(PlaybackCommand.Pause)
+                commandDispatcher(PlaybackCommand.Pause)
                 return true
             }
             KeyEvent.KEYCODE_MEDIA_STOP -> {
                 Log.i(TAG, "MEDIA_STOP intercepted -> dispatching Stop")
-                controller.dispatch(PlaybackCommand.Stop)
+                commandDispatcher(PlaybackCommand.Stop)
                 return true
             }
             KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
-                controller.dispatch(PlaybackCommand.SeekForward(TvPlayerConfig.QuickSeek.FORWARD_STEP_MS))
+                commandDispatcher(PlaybackCommand.SeekForward(TvPlayerConfig.QuickSeek.FORWARD_STEP_MS))
                 return true
             }
             KeyEvent.KEYCODE_MEDIA_REWIND -> {
-                controller.dispatch(PlaybackCommand.SeekBackward(TvPlayerConfig.QuickSeek.REWIND_STEP_MS))
+                commandDispatcher(PlaybackCommand.SeekBackward(TvPlayerConfig.QuickSeek.REWIND_STEP_MS))
                 return true
             }
         }
@@ -108,15 +131,14 @@ class TvRemoteController(
             }
             when (keyCode) {
                 KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
+                    if (callback.isEndOrErrorVisible()) {
+                        return callback.handleEndOrErrorBack()
+                    }
                     if (callback.cancelCountdown()) {
                         Log.i(TAG, "Remote BACK cancelled auto next countdown.")
                         return true
                     }
                     callback.showExitConfirmDialog()
-                    return true
-                }
-                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                    callback.showOverlay(focusOnSeekBar = false)
                     return true
                 }
                 KeyEvent.KEYCODE_DPAD_UP -> {
@@ -145,9 +167,17 @@ class TvRemoteController(
                     )
                     return true
                 }
+                else -> {
+                    if (isConfirmKey(keyCode)) {
+                        callback.showOverlay(focusOnSeekBar = false)
+                        return true
+                    }
+                }
             }
         } else {
             // When Overlay is VISIBLE
+            callback.resetOverlayHideTimer()
+
             when (keyCode) {
                 KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
                     if (callback.isScrubbing()) {
@@ -176,13 +206,15 @@ class TvRemoteController(
                         callback.focusButtonBar()
                         return true
                     }
-                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                        if (callback.isScrubbing()) {
-                            callback.commitScrub()
-                        } else {
-                            controller.dispatch(PlaybackCommand.TogglePlayPause)
+                    else -> {
+                        if (isConfirmKey(keyCode)) {
+                            if (callback.isScrubbing()) {
+                                callback.commitScrub()
+                            } else {
+                                commandDispatcher(PlaybackCommand.TogglePlayPause)
+                            }
+                            return true
                         }
-                        return true
                     }
                 }
             } else {
@@ -192,9 +224,16 @@ class TvRemoteController(
                         callback.focusSeekBar()
                         return true
                     }
-                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                        if (callback.performFocusedClick()) {
-                            return true
+                    KeyEvent.KEYCODE_DPAD_DOWN -> {
+                        // Pressing DOWN at bottom action buttons hides overlay gracefully
+                        callback.hideOverlay()
+                        return true
+                    }
+                    else -> {
+                        if (isConfirmKey(keyCode)) {
+                            if (callback.performFocusedClick()) {
+                                return true
+                            }
                         }
                     }
                 }
@@ -223,8 +262,7 @@ class TvRemoteController(
         }
 
         if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT || keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
-            pendingSpeedHoldRunnable?.let { mainHandler.removeCallbacks(it) }
-            pendingSpeedHoldRunnable = null
+            cancelSpeedHoldTimers()
 
             if (callback.isHoldingSpeed()) {
                 callback.deactivateHoldingSpeed()
@@ -240,26 +278,43 @@ class TvRemoteController(
     }
 
     private fun handleSpeedHoldOnDown(isForward: Boolean, event: KeyEvent?, speed: Float, text: String) {
+        // Watchdog: auto-restore if key up event gets dropped (e.g., infrared interference)
+        speedHoldWatchdogRunnable?.let { removeAction(it) }
+        val watchdog = Runnable {
+            if (callback.isHoldingSpeed()) {
+                Log.w(TAG, "Speed hold watchdog triggered (missing KEY_UP), resetting speed.")
+                callback.deactivateHoldingSpeed()
+            }
+        }
+        speedHoldWatchdogRunnable = watchdog
+        postDelayedAction(watchdog, SPEED_HOLD_WATCHDOG_TIMEOUT_MS)
+
         if (event?.repeatCount == 0) {
             if (pendingSpeedHoldRunnable == null && !callback.isHoldingSpeed()) {
                 val r = Runnable {
                     callback.activateHoldingSpeed(speed, text)
                 }
                 pendingSpeedHoldRunnable = r
-                mainHandler.postDelayed(r, TvPlayerConfig.HoldingSpeed.TRIGGER_DELAY_MS)
+                postDelayedAction(r, TvPlayerConfig.HoldingSpeed.TRIGGER_DELAY_MS)
             }
         } else if (event != null && event.repeatCount >= 1) {
             if (!callback.isHoldingSpeed()) {
-                pendingSpeedHoldRunnable?.let { mainHandler.removeCallbacks(it) }
+                pendingSpeedHoldRunnable?.let { removeAction(it) }
                 pendingSpeedHoldRunnable = null
                 callback.activateHoldingSpeed(speed, text)
             }
         }
     }
 
-    fun cleanup() {
-        pendingSpeedHoldRunnable?.let { mainHandler.removeCallbacks(it) }
+    private fun cancelSpeedHoldTimers() {
+        pendingSpeedHoldRunnable?.let { removeAction(it) }
         pendingSpeedHoldRunnable = null
+        speedHoldWatchdogRunnable?.let { removeAction(it) }
+        speedHoldWatchdogRunnable = null
+    }
+
+    fun cleanup() {
+        cancelSpeedHoldTimers()
     }
 
     /** True while the stream is loading/buffering and remote input must be locked. */
@@ -269,5 +324,6 @@ class TvRemoteController(
 
     companion object {
         private const val TAG = "TvRemoteController"
+        private const val SPEED_HOLD_WATCHDOG_TIMEOUT_MS = 1000L
     }
 }

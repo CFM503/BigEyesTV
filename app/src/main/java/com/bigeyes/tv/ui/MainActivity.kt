@@ -216,7 +216,10 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
             val nextEp = queue.peekNext()
             val epNumber = nextEp?.episodeNumber ?: (session.currentIndex + 2)
             binding.tvCountdownMessage.text = "即将播放下一集：第 ${epNumber} 集 (${session.countdownRemainingSeconds}s)"
-            binding.layoutCountdownCard.visibility = View.VISIBLE
+            if (binding.layoutCountdownCard.visibility != View.VISIBLE) {
+                binding.layoutCountdownCard.visibility = View.VISIBLE
+                binding.btnCountdownPlayNow.requestFocus()
+            }
         } else {
             binding.layoutCountdownCard.visibility = View.GONE
         }
@@ -656,8 +659,24 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
 
     override fun performFocusedClick(): Boolean {
         val focused = currentFocus
-        if (focused is Button) {
-            focused.performClick()
+        if (focused != null && focused.isClickable && focused.visibility == View.VISIBLE) {
+            return focused.performClick()
+        }
+        if (isOverlayVisible()) {
+            binding.btnOverlayPlayPause.requestFocus()
+            return binding.btnOverlayPlayPause.performClick()
+        }
+        return false
+    }
+
+    override fun isEndOrErrorVisible(): Boolean {
+        return binding.layoutPlaybackEnd.visibility == View.VISIBLE ||
+                binding.layoutPlaybackError.visibility == View.VISIBLE
+    }
+
+    override fun handleEndOrErrorBack(): Boolean {
+        if (isEndOrErrorVisible()) {
+            controller.dispatch(PlaybackCommand.Stop)
             return true
         }
         return false
@@ -675,9 +694,23 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
 
     // ==================== Remote Key Events Dispatching ====================
 
+    private var lastBackPressTime = 0L
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (remoteController.onKeyDown(keyCode, event)) {
             return true
+        }
+        if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE) {
+            if (binding.standbyLayout.visibility == View.VISIBLE) {
+                val now = System.currentTimeMillis()
+                if (now - lastBackPressTime < 2000L) {
+                    finish()
+                } else {
+                    lastBackPressTime = now
+                    Toast.makeText(this, "再按一次返回键退出应用", Toast.LENGTH_SHORT).show()
+                }
+                return true
+            }
         }
         return super.onKeyDown(keyCode, event)
     }
@@ -689,7 +722,7 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
         return super.onKeyUp(keyCode, event)
     }
 
-    private fun resetOverlayHideTimer() {
+    override fun resetOverlayHideTimer() {
         hideOverlayRunnable?.let { mainHandler.removeCallbacks(it) }
         val r = Runnable {
             if (isOverlayVisible()) {
