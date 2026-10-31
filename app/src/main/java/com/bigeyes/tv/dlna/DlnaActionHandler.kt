@@ -26,6 +26,7 @@ class DlnaActionHandler(
 
     fun canHandle(uri: String): Boolean {
         return uri == "/description.xml" ||
+                uri == "/icon.png" ||
                 uri == "/avtransport.xml" ||
                 uri == "/renderingcontrol.xml" ||
                 uri == "/connectionmanager.xml" ||
@@ -40,6 +41,7 @@ class DlnaActionHandler(
         return when {
             uri.startsWith("/upnp/event/") -> handleEventSubscription(session, uri)
             uri == "/description.xml" -> handleDeviceDescription()
+            uri == "/icon.png" -> handleIcon()
             uri == "/avtransport.xml" -> handleAvTransportScpd()
             uri == "/renderingcontrol.xml" -> handleRenderingControlScpd()
             uri == "/connectionmanager.xml" -> handleConnectionManagerScpd()
@@ -94,9 +96,29 @@ class DlnaActionHandler(
         }
     }
 
+    private fun handleIcon(): Response {
+        val pngBytes = byteArrayOf(
+            0x89.toByte(), 0x50.toByte(), 0x4E.toByte(), 0x47.toByte(), 0x0D.toByte(), 0x0A.toByte(), 0x1A.toByte(), 0x0A.toByte(),
+            0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x0D.toByte(), 0x49.toByte(), 0x48.toByte(), 0x44.toByte(), 0x52.toByte(),
+            0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x01.toByte(), 0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x01.toByte(),
+            0x08.toByte(), 0x06.toByte(), 0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x1F.toByte(), 0x15.toByte(), 0xC4.toByte(),
+            0x89.toByte(), 0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x0A.toByte(), 0x49.toByte(), 0x44.toByte(), 0x41.toByte(),
+            0x54.toByte(), 0x78.toByte(), 0x9C.toByte(), 0x63.toByte(), 0x00.toByte(), 0x01.toByte(), 0x00.toByte(), 0x00.toByte(),
+            0x05.toByte(), 0x00.toByte(), 0x01.toByte(), 0x0D.toByte(), 0x0A.toByte(), 0x2D.toByte(), 0xB4.toByte(), 0x00.toByte(),
+            0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x49.toByte(), 0x45.toByte(), 0x4E.toByte(), 0x44.toByte(), 0xAE.toByte(),
+            0x42.toByte(), 0x60.toByte(), 0x82.toByte()
+        )
+        return NanoHTTPD.newFixedLengthResponse(
+            Response.Status.OK,
+            "image/png",
+            java.io.ByteArrayInputStream(pngBytes),
+            pngBytes.size.toLong()
+        )
+    }
+
     private fun handleDeviceDescription(): Response {
         val xml = """<?xml version="1.0" encoding="utf-8"?>
-<root xmlns="urn:schemas-upnp-org:device-1-0">
+<root xmlns="urn:schemas-upnp-org:device-1-0" xmlns:dlna="urn:schemas-dlna-org:device-1-0">
     <specVersion>
         <major>1</major>
         <minor>0</minor>
@@ -112,6 +134,17 @@ class DlnaActionHandler(
         <modelURL>https://github.com/bigeyes-tv</modelURL>
         <serialNumber>${deviceIdentity.deviceId}</serialNumber>
         <UDN>${deviceIdentity.udn}</UDN>
+        <dlna:X_DLNADOC xmlns:dlna="urn:schemas-dlna-org:device-1-0">DMR-1.50</dlna:X_DLNADOC>
+        <dlna:X_DLNACAP xmlns:dlna="urn:schemas-dlna-org:device-1-0">srs-io,playcontainer-srs</dlna:X_DLNACAP>
+        <iconList>
+            <icon>
+                <mimetype>image/png</mimetype>
+                <width>128</width>
+                <height>128</height>
+                <depth>32</depth>
+                <url>/icon.png</url>
+            </icon>
+        </iconList>
         <serviceList>
             <service>
                 <serviceType>urn:schemas-upnp-org:service:AVTransport:1</serviceType>
@@ -200,24 +233,38 @@ class DlnaActionHandler(
             soapAction.contains("SetAVTransportURI") || body.contains("SetAVTransportURI") -> {
                 val streamUrl = extractXmlTagValue(body, "CurrentURI")?.let { cleanXmlValue(it) }.orEmpty()
                 val metadata = extractXmlTagValue(body, "CurrentURIMetaData")?.let { cleanXmlValue(it) }.orEmpty()
+                val finalUrl = if (streamUrl.isNotBlank()) {
+                    streamUrl
+                } else if (metadata.isNotBlank()) {
+                    extractXmlTagValue(metadata, "res")?.let { cleanXmlValue(it) }.orEmpty()
+                } else {
+                    ""
+                }
                 val title = if (metadata.isNotBlank()) {
                     extractXmlTagValue(metadata, "dc:title") ?: extractXmlTagValue(metadata, "title")
                 } else null
-                Log.i(TAG, "DLNA SetAVTransportURI extracted URL: $streamUrl, title: $title")
-                if (streamUrl.isNotBlank()) {
-                    playerManager.play(streamUrl, 0L, title)
+                Log.i(TAG, "DLNA SetAVTransportURI extracted URL: $finalUrl, title: $title")
+                if (finalUrl.isNotBlank()) {
+                    playerManager.play(finalUrl, 0L, title)
                 }
                 buildSoapResponse("SetAVTransportURIResponse", "urn:schemas-upnp-org:service:AVTransport:1", "")
             }
             soapAction.contains("Play") || body.contains("<u:Play") || body.contains("<Play") -> {
                 val streamUrl = extractXmlTagValue(body, "CurrentURI")?.let { cleanXmlValue(it) }.orEmpty()
                 val metadata = extractXmlTagValue(body, "CurrentURIMetaData")?.let { cleanXmlValue(it) }.orEmpty()
+                val finalUrl = if (streamUrl.isNotBlank()) {
+                    streamUrl
+                } else if (metadata.isNotBlank()) {
+                    extractXmlTagValue(metadata, "res")?.let { cleanXmlValue(it) }.orEmpty()
+                } else {
+                    ""
+                }
                 val title = if (metadata.isNotBlank()) {
                     extractXmlTagValue(metadata, "dc:title") ?: extractXmlTagValue(metadata, "title")
                 } else null
-                if (streamUrl.isNotBlank()) {
-                    Log.i(TAG, "DLNA Play containing CurrentURI: $streamUrl, title: $title")
-                    playerManager.play(streamUrl, 0L, title)
+                if (finalUrl.isNotBlank()) {
+                    Log.i(TAG, "DLNA Play containing URL: $finalUrl, title: $title")
+                    playerManager.play(finalUrl, 0L, title)
                 } else {
                     playerManager.resume()
                 }
@@ -300,6 +347,32 @@ class DlnaActionHandler(
                 """.trimIndent()
                 buildSoapResponse("GetTransportInfoResponse", "urn:schemas-upnp-org:service:AVTransport:1", innerXml)
             }
+            soapAction.contains("GetDeviceCapabilities") || body.contains("GetDeviceCapabilities") -> {
+                val innerXml = """
+                    <PlayMedia>NONE,NETWORK,HTTP-GET</PlayMedia>
+                    <RecMedia>NOT_IMPLEMENTED</RecMedia>
+                    <RecQualityModes>NOT_IMPLEMENTED</RecQualityModes>
+                """.trimIndent()
+                buildSoapResponse("GetDeviceCapabilitiesResponse", "urn:schemas-upnp-org:service:AVTransport:1", innerXml)
+            }
+            soapAction.contains("GetMediaInfo") || body.contains("GetMediaInfo") -> {
+                val durationSec = playerManager.getDurationMs() / 1000
+                val durFormatted = formatSecondsToTimeString(durationSec)
+                val rawUrl = playerManager.currentUrl ?: ""
+                val escapedUrl = escapeXml(rawUrl)
+                val innerXml = """
+                    <NrTracks>1</NrTracks>
+                    <MediaDuration>$durFormatted</MediaDuration>
+                    <CurrentURI>$escapedUrl</CurrentURI>
+                    <CurrentURIMetaData></CurrentURIMetaData>
+                    <NextURI></NextURI>
+                    <NextURIMetaData></NextURIMetaData>
+                    <PlayMedium>NETWORK</PlayMedium>
+                    <RecordMedium>NOT_IMPLEMENTED</RecordMedium>
+                    <WriteStatus>NOT_IMPLEMENTED</WriteStatus>
+                """.trimIndent()
+                buildSoapResponse("GetMediaInfoResponse", "urn:schemas-upnp-org:service:AVTransport:1", innerXml)
+            }
             else -> buildSoapFault(
                 "urn:schemas-upnp-org:service:AVTransport:1",
                 UPNP_ERROR_INVALID_ACTION,
@@ -367,7 +440,7 @@ class DlnaActionHandler(
                 buildSoapResponse("GetCurrentConnectionIDsResponse", service, "<ConnectionIDs>0</ConnectionIDs>")
             }
             soapAction.contains("GetProtocolInfo") || body.contains("GetProtocolInfo") -> {
-                val innerXml = "<Source>$protocolInfo</Source><Sink></Sink>"
+                val innerXml = "<Source>$protocolInfo</Source><Sink>$protocolInfo</Sink>"
                 buildSoapResponse("GetProtocolInfoResponse", service, innerXml)
             }
             else -> buildSoapFault(service, UPNP_ERROR_INVALID_ACTION, "Invalid Action")

@@ -11,6 +11,8 @@ import java.net.DatagramPacket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.MulticastSocket
+import java.net.NetworkInterface
+import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
@@ -74,7 +76,18 @@ class SsdpServer(
         notifyExecutor = null
 
         try {
-            multicastSocket?.leaveGroup(InetAddress.getByName(SSDP_MULTICAST_GROUP))
+            val group = InetAddress.getByName(SSDP_MULTICAST_GROUP)
+            val groupAddress = InetSocketAddress(group, SSDP_PORT)
+            val interfaces = NetworkInterface.getNetworkInterfaces()
+            while (interfaces != null && interfaces.hasMoreElements()) {
+                val netIf = interfaces.nextElement()
+                if (netIf.isUp && !netIf.isLoopback && netIf.supportsMulticast()) {
+                    try {
+                        multicastSocket?.leaveGroup(groupAddress, netIf)
+                    } catch (_: Exception) {}
+                }
+            }
+            multicastSocket?.leaveGroup(group)
         } catch (e: Exception) {
             // ignore
         }
@@ -105,9 +118,32 @@ class SsdpServer(
             val socket = MulticastSocket(null).apply {
                 reuseAddress = true
                 bind(InetSocketAddress(SSDP_PORT))
-                joinGroup(group)
             }
             multicastSocket = socket
+
+            // Explicitly join multicast group on all active non-loopback network interfaces
+            val groupAddress = InetSocketAddress(group, SSDP_PORT)
+            try {
+                val interfaces = NetworkInterface.getNetworkInterfaces()
+                while (interfaces != null && interfaces.hasMoreElements()) {
+                    val netIf = interfaces.nextElement()
+                    if (netIf.isUp && !netIf.isLoopback && netIf.supportsMulticast()) {
+                        try {
+                            socket.joinGroup(groupAddress, netIf)
+                            Log.d(TAG, "Joined SSDP multicast group on interface: ${netIf.name}")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to join multicast on ${netIf.name}: ${e.message}")
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Interface enumeration error: ${e.message}")
+            }
+
+            // Fallback joinGroup for generic network stack
+            try {
+                socket.joinGroup(group)
+            } catch (_: Exception) {}
 
             val buffer = ByteArray(4096)
             while (isRunning && !socket.isClosed) {
@@ -129,8 +165,8 @@ class SsdpServer(
         if (!message.startsWith("M-SEARCH", ignoreCase = true)) return
 
         val headers = parseHeaders(message)
-        val man = headers["man"] ?: headers["MAN"] ?: ""
-        val st = headers["st"] ?: headers["ST"] ?: ""
+        val man = headers["man"] ?: ""
+        val st = headers["st"]?.trim() ?: ""
 
         if (!man.contains("ssdp:discover", ignoreCase = true)) return
 
@@ -138,8 +174,8 @@ class SsdpServer(
         val myIp = NetworkUtils.getLocalIpAddress()
         val location = "http://$myIp:$port/description.xml"
 
-        val targets = listOf(
-            "ssdp:all",
+        // The real target descriptors advertised by this MediaRenderer device
+        val deviceTargets = listOf(
             "upnp:rootdevice",
             "urn:schemas-upnp-org:device:MediaRenderer:1",
             "urn:schemas-upnp-org:service:AVTransport:1",
@@ -148,9 +184,16 @@ class SsdpServer(
             udn
         )
 
-        for (target in targets) {
-            if (st.equals("ssdp:all", ignoreCase = true) || st.equals(target, ignoreCase = true)) {
+        if (st.equals("ssdp:all", ignoreCase = true)) {
+            // Respond with all individual targets, never respond with ST: ssdp:all
+            for (target in deviceTargets) {
                 sendSearchResponse(remoteAddress, remotePort, target, location, udn)
+            }
+        } else {
+            for (target in deviceTargets) {
+                if (st.equals(target, ignoreCase = true)) {
+                    sendSearchResponse(remoteAddress, remotePort, target, location, udn)
+                }
             }
         }
     }
@@ -171,6 +214,7 @@ LOCATION: $location
 SERVER: Android/UPnP/1.0 DLNADOC/1.50 BigEyesTV/${BuildConfig.VERSION_NAME}
 ST: $st
 USN: $usn
+CONTENT-LENGTH: 0
 
 """.replace("\n", "\r\n")
 
@@ -192,6 +236,8 @@ USN: $usn
             "upnp:rootdevice",
             "urn:schemas-upnp-org:device:MediaRenderer:1",
             "urn:schemas-upnp-org:service:AVTransport:1",
+            "urn:schemas-upnp-org:service:RenderingControl:1",
+            "urn:schemas-upnp-org:service:ConnectionManager:1",
             udn
         )
 
@@ -247,7 +293,7 @@ USN: $usn
         message.lines().forEach { line ->
             val colon = line.indexOf(':')
             if (colon > 0) {
-                val k = line.substring(0, colon).trim()
+                val k = line.substring(0, colon).trim().lowercase(Locale.ROOT)
                 val v = line.substring(colon + 1).trim()
                 map[k] = v
             }

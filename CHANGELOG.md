@@ -2,6 +2,18 @@
 
 本文档记录 `BigEyes-TV` 的所有版本迭代与变更历史。
 
+## [v1.3.1] - 2026-10-31 (国内主流视频APP投屏深度适配：优酷/爱奇艺/腾讯视频全兼容)
+
+### 🚀 DLNA / UPnP 协议栈增强 (P0)
+* **SSDP 搜索报文大小写容错**：`SsdpServer.parseHeaders` 统一键名为小写，彻底解决优酷等 APP 发送首字母大写 `Man: "ssdp:discover"` / `St:` 被无视丢弃的问题；
+* **DLNA DMR-1.50 规范标识补齐**：`description.xml` 声明 `xmlns:dlna="urn:schemas-dlna-org:device-1-0"`，补齐 `<dlna:X_DLNADOC>DMR-1.50</dlna:X_DLNADOC>`、`X_DLNACAP` 与 `<iconList>` 资源路由（内置 `/icon.png`），避免被国内视频客户端设备过滤机制剔除；
+* **ConnectionManager Sink 媒体能力补齐**：修复 `GetProtocolInfo` 将接收端能力声明为 `<Sink></Sink>` 的致命缺陷，向控制点完整呈现 `video/mp4`、`application/vnd.apple.mpegurl` 等解码能力；
+* **AVTransport 动作全面覆盖**：扩充支持 `GetDeviceCapabilities` 与 `GetMediaInfo` 动作，`SetAVTransportURI` 与 `Play` 支持从 `CurrentURIMetaData` 的 `<res>` 节点提取播放直链；
+* **物理网卡组播显式绑定**：`SsdpServer` 自动枚举本地非回环活跃物理网卡加入组播，并在 `TvReceiverService` 常驻维持 `MulticastLock`，防止电视端息屏或多网卡环境组播报文被 Linux 内核丢弃；
+* **防盗链与默认 User-Agent 优化**：ExoPlayer 默认请求头伪装为通用 TV 浏览器，允许跨协议跳转，防止第三方 CDN 返回 403 Forbidden。
+
+---
+
 ## [v1.3.0] - 2026-10-30 (BigEyes LAN Companion 伴侣协议 v1.0 与端到端联动体系构建)
 
 ### 🚀 伴侣联动协议 (P0)

@@ -33,6 +33,7 @@ class TvReceiverService : Service(), TvPlayerListener {
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private var multicastLock: WifiManager.MulticastLock? = null
 
     private lateinit var notificationManager: NotificationManager
 
@@ -195,7 +196,11 @@ class TvReceiverService : Service(), TvPlayerListener {
             wifiLock = wifiManager?.createWifiLock(wifiMode, "BigEyesTV::WifiLock")?.apply {
                 acquire()
             }
-            Log.d(TAG, "WifiLock acquired")
+            multicastLock = wifiManager?.createMulticastLock("BigEyesTV::ServiceMulticastLock")?.apply {
+                setReferenceCounted(true)
+                acquire()
+            }
+            Log.d(TAG, "WifiLock and MulticastLock acquired")
         } catch (e: Exception) {
             Log.w(TAG, "WifiLock acquire failed: ${e.message}")
         }
@@ -215,6 +220,16 @@ class TvReceiverService : Service(), TvPlayerListener {
                 wifiLock?.release()
                 Log.d(TAG, "WifiLock released")
             }
+        } catch (e: Exception) {
+            // ignore
+        }
+
+        try {
+            if (multicastLock?.isHeld == true) {
+                multicastLock?.release()
+                Log.d(TAG, "MulticastLock released")
+            }
+            multicastLock = null
         } catch (e: Exception) {
             // ignore
         }

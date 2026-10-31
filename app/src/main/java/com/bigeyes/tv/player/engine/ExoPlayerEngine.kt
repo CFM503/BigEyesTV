@@ -31,6 +31,8 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
      * Headers are re-applied before every prepare() so playlist + segment requests carry them.
      */
     private val httpRequestFactory = DefaultHttpDataSource.Factory()
+        .setUserAgent("Mozilla/5.0 (Linux; Android 10; TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.0.0 Safari/537.36")
+        .setAllowCrossProtocolRedirects(true)
     private val dataSourceFactory = DefaultDataSource.Factory(context.applicationContext, httpRequestFactory)
 
     @Volatile

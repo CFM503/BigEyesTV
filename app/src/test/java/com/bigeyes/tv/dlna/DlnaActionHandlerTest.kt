@@ -67,6 +67,7 @@ class DlnaActionHandlerTest {
     @Test
     fun testCanHandleCoversEveryAdvertisedEndpoint() {
         assertTrue(handler.canHandle("/description.xml"))
+        assertTrue(handler.canHandle("/icon.png"))
         assertTrue(handler.canHandle("/avtransport.xml"))
         assertTrue(handler.canHandle("/renderingcontrol.xml"))
         assertTrue(handler.canHandle("/connectionmanager.xml"))
@@ -234,7 +235,7 @@ class DlnaActionHandlerTest {
         val xml = body(resp)
         assertEquals(200, resp.status.requestStatus)
         assertTrue(xml.contains("application/vnd.apple.mpegurl"))
-        assertTrue(xml.contains("<Sink></Sink>"))
+        assertTrue(xml.contains("<Sink>application/vnd.apple.mpegurl") || xml.contains("<Sink>http-get:"))
     }
 
     // ------------------------------------------------------------- AVTransport
@@ -353,5 +354,40 @@ class DlnaActionHandlerTest {
         assertTrue("DIDL-Lite" in xml)
         assertTrue("测试剧集" in xml)
         assertTrue("&amp;amp;" in xml)
+    }
+    @Test
+    fun testIconEndpointReturnsPng() {
+        val resp = handler.handleRequest(get("/icon.png"))
+        assertEquals(200, resp.status.requestStatus)
+        assertEquals("image/png", resp.mimeType)
+    }
+
+    @Test
+    fun testGetDeviceCapabilitiesReturnsNetworkMedium() {
+        val resp = handler.handleRequest(
+            soapSession(
+                "/upnp/control/avtransport",
+                "urn:schemas-upnp-org:service:AVTransport:1#GetDeviceCapabilities",
+                soapBody("GetDeviceCapabilities", "AVTransport")
+            )
+        )
+        val xml = body(resp)
+        assertEquals(200, resp.status.requestStatus)
+        assertTrue(xml.contains("<PlayMedia>NONE,NETWORK,HTTP-GET</PlayMedia>"))
+    }
+
+    @Test
+    fun testGetMediaInfoReturnsTrackInfo() {
+        player.play("http://test.com/video.mp4", 0L, "Sample Video")
+        val resp = handler.handleRequest(
+            soapSession(
+                "/upnp/control/avtransport",
+                "urn:schemas-upnp-org:service:AVTransport:1#GetMediaInfo",
+                soapBody("GetMediaInfo", "AVTransport")
+            )
+        )
+        val xml = body(resp)
+        assertEquals(200, resp.status.requestStatus)
+        assertTrue(xml.contains("<CurrentURI>http://test.com/video.mp4</CurrentURI>"))
     }
 }
