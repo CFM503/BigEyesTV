@@ -45,7 +45,7 @@ class TvPlayerManager private constructor(private val context: Context) : Playba
         private set
 
     @Volatile
-    var isBuffering: Boolean = false
+    override var isBuffering: Boolean = false
         private set
 
     @Volatile
@@ -221,7 +221,6 @@ class TvPlayerManager private constructor(private val context: Context) : Playba
     override fun getSeriesId(): String? = controller.session.value.seriesId?.takeIf { it.isNotBlank() }
     override fun getSeriesTitle(): String? = controller.session.value.seriesTitle?.takeIf { it.isNotBlank() } ?: currentTrackTitle()
     override fun getCurrentEpisode(): Episode? = controller.session.value.currentEpisode
-    override fun isBuffering(): Boolean = controller.session.value.playbackState == PlaybackState.BUFFERING || controller.session.value.playbackState == PlaybackState.LOADING
     override fun isAutoPlayNext(): Boolean = controller.session.value.autoPlayNext
     override fun getErrorMessage(): String? = controller.session.value.errorMessage
 

@@ -67,7 +67,7 @@ interface PlaybackFacade {
     fun getSeriesId(): String? = null
     fun getSeriesTitle(): String? = currentTrackTitle()
     fun getCurrentEpisode(): Episode? = null
-    fun isBuffering(): Boolean = false
+    val isBuffering: Boolean get() = false
     fun isAutoPlayNext(): Boolean = true
     fun getErrorMessage(): String? = null
     fun bringActivityToFront() {}

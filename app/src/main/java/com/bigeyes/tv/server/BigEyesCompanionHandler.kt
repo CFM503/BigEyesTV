@@ -78,7 +78,7 @@ class BigEyesCompanionHandler(
         val stateStr = when {
             playerManager.isPlaying() -> "PLAYING"
             playerManager.isEnded() -> "COMPLETED"
-            playerManager.isBuffering() -> "BUFFERING"
+            playerManager.isBuffering -> "BUFFERING"
             playerManager.currentState == PlayerState.ERROR -> "ERROR"
             playerManager.currentState == PlayerState.READY -> "PAUSED"
             playerManager.currentState == PlayerState.BUFFERING -> "BUFFERING"
@@ -100,7 +100,7 @@ class BigEyesCompanionHandler(
             put("durationMs", playerManager.getDurationMs())
             put("autoPlayNext", playerManager.isAutoPlayNext())
             put("speed", playerManager.getPlaybackSpeed().toDouble())
-            put("isBuffering", playerManager.isBuffering())
+            put("isBuffering", playerManager.isBuffering)
             put("errorMessage", playerManager.getErrorMessage() ?: "")
         }
         return jsonResponse(Response.Status.OK, json)
