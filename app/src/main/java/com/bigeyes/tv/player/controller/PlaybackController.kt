@@ -52,7 +52,8 @@ class PlaybackController private constructor(
     private val _session = MutableStateFlow(PlaybackSession.INITIAL)
     val session: StateFlow<PlaybackSession> = _session.asStateFlow()
 
-    private var progressTickerRunnable: Runnable? = null
+    private var progressTickerRunnable: Runnable? = null
+    private var resolveTimeoutRunnable: Runnable? = null
 
     init {
         playerEngine.setListener(this)
@@ -131,7 +132,8 @@ class PlaybackController private constructor(
     }
 
     private fun handleTogglePlayPause() {
-        if (playerEngine.isPlaying()) {
+        val state = _session.value.playbackState
+        if (playerEngine.isPlaying() || state == PlaybackState.BUFFERING || state == PlaybackState.LOADING) {
             handlePause()
         } else {
             handleResume()
@@ -285,8 +287,7 @@ class PlaybackController private constructor(
         Log.i(TAG, "User cancelled auto next countdown.")
         _session.update {
             it.copy(
-                countdownRemainingSeconds = null,
-                autoPlayNext = false
+                countdownRemainingSeconds = null
             )
         }
     }
@@ -298,7 +299,13 @@ class PlaybackController private constructor(
 
     private fun handleRetry() {
         Log.i(TAG, "Manual retry requested.")
-        playerEngine.manualRetry()
+        val current = _session.value.currentEpisode
+        if (current != null && current.playUrl.isNotBlank()) {
+            val lastPos = _session.value.position
+            playEpisodeInternal(current, lastPos)
+        } else {
+            playerEngine.manualRetry()
+        }
     }
 
     private fun playEpisodeInternal(episode: Episode, startPositionMs: Long) {
@@ -327,8 +334,11 @@ class PlaybackController private constructor(
             }
             playerEngine.pause()
             isSwitchingEpisode.set(false)
+            scheduleResolveTimeout(generationId, episode)
             return
         }
+
+        cancelResolveTimeout()
 
         _session.update {
             it.copy(
@@ -496,6 +506,32 @@ class PlaybackController private constructor(
     }
 
     // ==================== Progress & 10s Countdown Ticker ====================
+
+    private fun scheduleResolveTimeout(generationId: Long, episode: Episode) {
+        cancelResolveTimeout()
+        val r = Runnable {
+            if (completionGuard.getCurrentGenerationId() == generationId &&
+                _session.value.playbackState == PlaybackState.BUFFERING &&
+                _session.value.currentEpisode?.playUrl.isNullOrBlank()
+            ) {
+                Log.w(TAG, "Timed out waiting for phone to resolve stream for ${episode.toDisplayTitle()}")
+                _session.update {
+                    it.copy(
+                        playbackState = PlaybackState.ERROR,
+                        errorMessage = "等待手机端解析超时，请在手机上检查视频源或重新选集",
+                        playbackHint = "解析超时，请重试"
+                    )
+                }
+            }
+        }
+        resolveTimeoutRunnable = r
+        mainHandler.postDelayed(r, 25_000L)
+    }
+
+    private fun cancelResolveTimeout() {
+        resolveTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+        resolveTimeoutRunnable = null
+    }
 
     private fun startProgressTicker() {
         stopProgressTicker()

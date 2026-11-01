@@ -53,6 +53,7 @@ class TvRemoteController(
         fun focusButtonBar()
         fun performFocusedClick(): Boolean
         fun cancelCountdown(): Boolean
+        fun isCountdownVisible(): Boolean
         fun isPlayerVisible(): Boolean
     }
 
@@ -129,15 +130,25 @@ class TvRemoteController(
             if (!callback.isPlayerVisible()) {
                 return false
             }
+
+            // End / Error state: BACK stops playback; all other keys pass to system for native focus navigation
+            if (callback.isEndOrErrorVisible()) {
+                if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE) {
+                    return callback.handleEndOrErrorBack()
+                }
+                return false
+            }
+
+            // Countdown state: BACK cancels countdown; all other keys pass to button navigation ("立即播放" / "取消")
+            if (callback.isCountdownVisible()) {
+                if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE) {
+                    return callback.cancelCountdown()
+                }
+                return false
+            }
+
             when (keyCode) {
                 KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
-                    if (callback.isEndOrErrorVisible()) {
-                        return callback.handleEndOrErrorBack()
-                    }
-                    if (callback.cancelCountdown()) {
-                        Log.i(TAG, "Remote BACK cancelled auto next countdown.")
-                        return true
-                    }
                     callback.showExitConfirmDialog()
                     return true
                 }
@@ -169,6 +180,7 @@ class TvRemoteController(
                 }
                 else -> {
                     if (isConfirmKey(keyCode)) {
+                        commandDispatcher(PlaybackCommand.TogglePlayPause)
                         callback.showOverlay(focusOnSeekBar = false)
                         return true
                     }
@@ -253,6 +265,9 @@ class TvRemoteController(
         if (!callback.isPlayerVisible() && !callback.isOverlayVisible()) {
             return false
         }
+        if (callback.isEndOrErrorVisible() || callback.isCountdownVisible()) {
+            return false
+        }
 
         if (callback.isOverlayVisible() && callback.isSeekBarFocused()) {
             if (callback.isScrubbing() && (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT || keyCode == KeyEvent.KEYCODE_DPAD_LEFT)) {
@@ -268,8 +283,14 @@ class TvRemoteController(
                 callback.deactivateHoldingSpeed()
                 return true
             } else if (!callback.isOverlayVisible()) {
-                // Short tap on left/right when overlay hidden -> show overlay
-                callback.showOverlay()
+                // Short tap on left/right when overlay hidden -> quick seek ±10s and show overlay
+                val isForward = (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT)
+                val stepMs = 10_000L
+                commandDispatcher(
+                    if (isForward) PlaybackCommand.SeekForward(stepMs)
+                    else PlaybackCommand.SeekBackward(stepMs)
+                )
+                callback.showOverlay(focusOnSeekBar = true)
                 return true
             }
         }

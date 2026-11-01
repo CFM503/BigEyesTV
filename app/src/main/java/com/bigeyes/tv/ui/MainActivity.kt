@@ -386,12 +386,20 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
         }
 
         binding.btnOverlayPrevEpisode.setOnClickListener {
-            controller.dispatch(PlaybackCommand.Previous)
+            if (!controller.episodeQueue.hasPrevious()) {
+                Toast.makeText(this, "已经是第一集", Toast.LENGTH_SHORT).show()
+            } else {
+                controller.dispatch(PlaybackCommand.Previous)
+            }
             resetOverlayHideTimer()
         }
 
         binding.btnOverlayNextEpisode.setOnClickListener {
-            controller.dispatch(PlaybackCommand.Next)
+            if (!controller.episodeQueue.hasNext()) {
+                Toast.makeText(this, "已经是最后一集", Toast.LENGTH_SHORT).show()
+            } else {
+                controller.dispatch(PlaybackCommand.Next)
+            }
             resetOverlayHideTimer()
         }
 
@@ -415,14 +423,20 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
             resetOverlayHideTimer()
         }
 
+        val prefs = getSharedPreferences("bigeyes_tv_settings", MODE_PRIVATE)
+        val aspectRatios = TvPlayerConfig.PlaybackOptions.ASPECT_RATIOS
+        val aspectRatioNames = TvPlayerConfig.PlaybackOptions.ASPECT_RATIO_NAMES
+        currentAspectRatioIndex = prefs.getInt("aspect_ratio_index", 0).coerceIn(0, aspectRatios.size - 1)
+        binding.playerView.resizeMode = aspectRatios[currentAspectRatioIndex]
+        binding.btnOverlayAspectRatio.text = aspectRatioNames[currentAspectRatioIndex]
+
         binding.btnOverlayAspectRatio.setOnClickListener {
-            val aspectRatios = TvPlayerConfig.PlaybackOptions.ASPECT_RATIOS
-            val aspectRatioNames = TvPlayerConfig.PlaybackOptions.ASPECT_RATIO_NAMES
             currentAspectRatioIndex = (currentAspectRatioIndex + 1) % aspectRatios.size
             val newMode = aspectRatios[currentAspectRatioIndex]
             val modeName = aspectRatioNames[currentAspectRatioIndex]
             binding.playerView.resizeMode = newMode
             binding.btnOverlayAspectRatio.text = modeName
+            prefs.edit().putInt("aspect_ratio_index", currentAspectRatioIndex).apply()
             Toast.makeText(this, "画面$modeName", Toast.LENGTH_SHORT).show()
             resetOverlayHideTimer()
         }
@@ -539,7 +553,7 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
         exitConfirmDialog = dialog
         dialog.show()
 
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.apply {
+        dialog.getButton(AlertDialog.BUTTON_NEGATIVE)?.apply {
             isFocusable = true
             isFocusableInTouchMode = true
             requestFocus()
@@ -691,6 +705,8 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
         }
         return false
     }
+
+    override fun isCountdownVisible(): Boolean = binding.layoutCountdownCard.visibility == View.VISIBLE
 
     // ==================== Remote Key Events Dispatching ====================
 

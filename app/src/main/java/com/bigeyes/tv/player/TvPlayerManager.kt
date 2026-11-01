@@ -203,12 +203,18 @@ class TvPlayerManager private constructor(private val context: Context) : Playba
         startPositionMs: Long,
         autoPlayNext: Boolean
     ) {
-        controller.episodeQueue.setQueue(queue, startIndex)
-        controller.dispatch(PlaybackCommand.SetAutoPlayNext(autoPlayNext))
-        if (queue.isNotEmpty() && startIndex in queue.indices) {
-            val target = queue[startIndex]
-            play(target.playUrl, startPositionMs, target.toDisplayTitle())
-        }
+        if (queue.isEmpty()) return
+        val safeIndex = startIndex.coerceIn(0, queue.size - 1)
+        currentUrl = queue[safeIndex].playUrl
+        controller.dispatch(
+            PlaybackCommand.PlayQueue(
+                queue = queue,
+                startIndex = safeIndex,
+                startPositionMs = startPositionMs,
+                autoPlayNext = autoPlayNext
+            )
+        )
+        bringActivityToFront()
     }
 
     override fun playEpisode(index: Int, startPositionMs: Long) {

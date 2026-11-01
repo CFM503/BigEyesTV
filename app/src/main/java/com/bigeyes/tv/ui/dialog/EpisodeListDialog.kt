@@ -58,7 +58,9 @@ class EpisodeListDialog(
         val spanCount = if (episodes.size > 8) 6 else 4
         binding.recyclerEpisodes.layoutManager = GridLayoutManager(context, spanCount)
         val adapter = EpisodeAdapter(episodes, currentIndex) { position ->
-            controller.dispatch(PlaybackCommand.PlayEpisode(position))
+            if (position != currentIndex) {
+                controller.dispatch(PlaybackCommand.PlayEpisode(position))
+            }
             dismiss()
         }
         binding.recyclerEpisodes.adapter = adapter

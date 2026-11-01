@@ -144,9 +144,22 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
 
             override fun onPlayerError(error: PlaybackException) {
                 val msg = error.message ?: "Playback error: ${error.errorCodeName}"
-                Log.e(TAG, "ExoPlayer error: $msg", error)
+                Log.e(TAG, "ExoPlayer error: $msg (code: ${error.errorCode})", error)
                 cancelBufferingTimeout()
                 cancelAutoRetry()
+
+                val cause = error.cause
+                val isHttp4xx = error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS ||
+                        (cause is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException &&
+                                cause.responseCode in 400..499)
+
+                if (isHttp4xx) {
+                    val httpCode = (cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.responseCode
+                    val userMsg = "视频地址已失效或受防盗链保护 (HTTP ${httpCode ?: 403})，请在手机端重新嗅探投屏"
+                    Log.w(TAG, "Fast-failing HTTP 4xx error without recovery: $userMsg")
+                    notifyError(userMsg)
+                    return
+                }
 
                 if (activeUrl == null) {
                     notifyError(msg)

@@ -62,6 +62,7 @@ class TvRemoteControllerTest {
             }
             return false
         }
+        override fun isCountdownVisible(): Boolean = countdownActive
         override fun isPlayerVisible(): Boolean = playerVisible
     }
 
@@ -132,16 +133,56 @@ class TvRemoteControllerTest {
     fun testConfirmKeysCompatibility() {
         fakeCallback.overlayVisible = false
 
-        // NUMPAD_ENTER should show overlay
+        // NUMPAD_ENTER should toggle play/pause and show overlay
         val consumedNumpad = remoteController.onKeyDown(KeyEvent.KEYCODE_NUMPAD_ENTER, null)
         assertTrue(consumedNumpad)
         assertEquals(1, fakeCallback.showOverlayCalls)
+        assertTrue(dispatchedCommands.lastOrNull() is PlaybackCommand.TogglePlayPause)
 
-        // BUTTON_A should also show overlay
+        // BUTTON_A should also toggle play/pause and show overlay
         fakeCallback.overlayVisible = false
         val consumedButtonA = remoteController.onKeyDown(KeyEvent.KEYCODE_BUTTON_A, null)
         assertTrue(consumedButtonA)
         assertEquals(2, fakeCallback.showOverlayCalls)
+    }
+
+    @Test
+    fun testDpadNavigationInEndOrErrorDoesNotIntercept() {
+        fakeCallback.overlayVisible = false
+        fakeCallback.endOrErrorVisible = true
+
+        val leftConsumed = remoteController.onKeyDown(KeyEvent.KEYCODE_DPAD_LEFT, null)
+        assertFalse("DPAD_LEFT must pass to native focus in end/error overlay", leftConsumed)
+
+        val rightConsumed = remoteController.onKeyDown(KeyEvent.KEYCODE_DPAD_RIGHT, null)
+        assertFalse("DPAD_RIGHT must pass to native focus in end/error overlay", rightConsumed)
+
+        val upConsumed = remoteController.onKeyUp(KeyEvent.KEYCODE_DPAD_RIGHT, null)
+        assertFalse("Key up must pass through in end/error overlay", upConsumed)
+    }
+
+    @Test
+    fun testDpadNavigationInCountdownDoesNotIntercept() {
+        fakeCallback.overlayVisible = false
+        fakeCallback.countdownActive = true
+
+        val leftConsumed = remoteController.onKeyDown(KeyEvent.KEYCODE_DPAD_LEFT, null)
+        assertFalse("DPAD_LEFT must pass to button navigation in countdown card", leftConsumed)
+
+        val rightConsumed = remoteController.onKeyDown(KeyEvent.KEYCODE_DPAD_RIGHT, null)
+        assertFalse("DPAD_RIGHT must pass to button navigation in countdown card", rightConsumed)
+    }
+
+    @Test
+    fun testShortTapLeftRightWhenOverlayHiddenQuickSeeks() {
+        fakeCallback.overlayVisible = false
+
+        val upRightConsumed = remoteController.onKeyUp(KeyEvent.KEYCODE_DPAD_RIGHT, null)
+        assertTrue(upRightConsumed)
+        val lastCommand = dispatchedCommands.lastOrNull()
+        assertTrue(lastCommand is PlaybackCommand.SeekForward)
+        assertEquals(10_000L, (lastCommand as PlaybackCommand.SeekForward).stepMs)
+        assertEquals(1, fakeCallback.showOverlayCalls)
     }
 
     @Test
