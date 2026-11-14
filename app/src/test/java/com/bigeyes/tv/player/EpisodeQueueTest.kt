@@ -139,4 +139,27 @@ class EpisodeQueueTest {
         assertTrue(updated)
         assertEquals(freshUrl, queue.current()?.playUrl)
     }
+
+    @Test
+    fun testUpdateEpisodeUrlAlsoUpdatesHeadersAndTitleDeduplicates() {
+        val ep = Episode(
+            seriesId = "s2",
+            seriesTitle = "三体",
+            episodeNumber = 3,
+            episodeTitle = "第3集 古筝行动",
+            episodeIndex = 2,
+            playUrl = "http://cdn.com/old.m3u8",
+            headers = mapOf("Referer" to "https://old.example.com")
+        )
+        assertEquals("三体 第3集 古筝行动", ep.toDisplayTitle())
+
+        val epPlain = ep.copy(episodeTitle = "三体")
+        assertEquals("三体 第3集", epPlain.toDisplayTitle())
+
+        val queue = EpisodeQueue(listOf(ep), 0)
+        val newHeaders = mapOf("Referer" to "https://new.example.com", "Cookie" to "k=v")
+        assertTrue(queue.updateEpisodeUrl(0, "http://cdn.com/new.m3u8", newHeaders))
+        assertEquals("http://cdn.com/new.m3u8", queue.current()?.playUrl)
+        assertEquals(newHeaders, queue.current()?.headers)
+    }
 }

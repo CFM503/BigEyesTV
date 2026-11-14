@@ -59,6 +59,23 @@ class TvStatusReporterTest {
         assertEquals(45_000L, snapshot.positionMs)
         assertEquals(120_000L, snapshot.durationMs)
         assertTrue(snapshot.autoPlayNext)
+        assertEquals(1.0f, snapshot.speed, 0.001f)
+        assertNull(snapshot.errorMessage)
+    }
+
+    @Test
+    fun testSnapshotIncludesSpeedAndErrorChangesSignature() {
+        val normal = TvStatusSnapshot.from(session(PlaybackState.PLAYING))
+        val fast = TvStatusSnapshot.from(
+            session(PlaybackState.PLAYING).copy(speed = 1.5f)
+        )
+        val errored = TvStatusSnapshot.from(
+            session(PlaybackState.ERROR).copy(errorMessage = "HTTP 403")
+        )
+
+        assertEquals(1.5f, fast.speed, 0.001f)
+        assertNotEquals(normal.signature, fast.signature)
+        assertEquals("HTTP 403", errored.errorMessage)
     }
 
     @Test

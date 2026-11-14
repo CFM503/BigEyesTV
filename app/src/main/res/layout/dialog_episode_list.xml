@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="wrap_content"
-    android:background="@drawable/bg_control_overlay"
+    android:layout_height="match_parent"
+    android:background="@drawable/bg_dialog_panel"
     android:orientation="vertical"
     android:padding="28dp">
 
@@ -11,6 +11,13 @@
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
         android:orientation="horizontal">
+
+        <ImageView
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_marginEnd="10dp"
+            android:contentDescription="@null"
+            android:src="@drawable/ic_playlist" />
 
         <TextView
             android:id="@+id/tvDialogTitle"
@@ -29,26 +36,52 @@
             android:layout_weight="1"
             android:ellipsize="end"
             android:singleLine="true"
+            android:text=""
             android:textColor="@color/accent_blue"
-            android:textSize="18sp"
-            android:text="" />
+            android:textSize="18sp" />
 
         <TextView
             android:id="@+id/tvDialogEpisodeCount"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:layout_marginEnd="16dp"
+            android:text=""
             android:textColor="@color/text_secondary"
-            android:textSize="15sp"
-            android:text="" />
+            android:textSize="15sp" />
+
+        <Button
+            android:id="@+id/btnCloseDialog"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:background="@drawable/bg_tv_button"
+            android:drawableStart="@drawable/ic_close"
+            android:drawablePadding="6dp"
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+            android:paddingStart="12dp"
+            android:paddingEnd="14dp"
+            android:text="关闭"
+            android:textColor="@color/white"
+            android:textSize="14sp" />
     </LinearLayout>
+
+    <TextView
+        android:id="@+id/tvEmptyEpisodes"
+        android:layout_width="match_parent"
+        android:layout_height="120dp"
+        android:gravity="center"
+        android:text="暂无剧集列表"
+        android:textColor="@color/text_secondary"
+        android:textSize="16sp"
+        android:visibility="gone" />
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/recyclerEpisodes"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="20dp"
+        android:layout_height="0dp"
+        android:layout_marginTop="18dp"
+        android:layout_weight="1"
         android:clipToPadding="false"
-        android:paddingBottom="12dp"
-        android:nestedScrollingEnabled="false" />
+        android:paddingBottom="8dp" />
 
 </LinearLayout>

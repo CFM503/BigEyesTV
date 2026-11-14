@@ -24,11 +24,13 @@ data class TvStatusSnapshot(
     val episodeTitle: String?,
     val positionMs: Long,
     val durationMs: Long,
-    val autoPlayNext: Boolean
+    val autoPlayNext: Boolean,
+    val speed: Float = 1.0f,
+    val errorMessage: String? = null
 ) {
     /** Identity of the "interesting" parts of a status; plain progress does not change it. */
     val signature: String
-        get() = "$state|$seriesId|$episodeIndex"
+        get() = "$state|$seriesId|$episodeIndex|$speed"
 
     companion object {
         fun from(session: PlaybackSession): TvStatusSnapshot {
@@ -42,7 +44,9 @@ data class TvStatusSnapshot(
                 episodeTitle = episode?.episodeTitle,
                 positionMs = session.position,
                 durationMs = session.duration,
-                autoPlayNext = session.autoPlayNext
+                autoPlayNext = session.autoPlayNext,
+                speed = session.speed,
+                errorMessage = session.errorMessage
             )
         }
 
@@ -137,6 +141,10 @@ class TvStatusReporter(private val context: Context) {
             putExtra(PlaybackIntentContract.EXTRA_POSITION_MS, snapshot.positionMs)
             putExtra(PlaybackIntentContract.EXTRA_DURATION_MS, snapshot.durationMs)
             putExtra(PlaybackIntentContract.EXTRA_AUTO_PLAY_NEXT, snapshot.autoPlayNext)
+            putExtra(PlaybackIntentContract.EXTRA_SPEED, snapshot.speed)
+            snapshot.errorMessage?.takeIf { it.isNotBlank() }?.let {
+                putExtra(PlaybackIntentContract.EXTRA_ERROR_MESSAGE, it)
+            }
         }
     }
 

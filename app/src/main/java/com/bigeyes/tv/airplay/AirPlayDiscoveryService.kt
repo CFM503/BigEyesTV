@@ -23,19 +23,24 @@ class AirPlayDiscoveryService(
     private var multicastLock: WifiManager.MulticastLock? = null
     private var registrationListener: NsdManager.RegistrationListener? = null
     private var isRegistered = false
+    private var isStarting = false
 
+    @Synchronized
     fun start() {
-        if (isRegistered) return
+        if (isRegistered || isStarting) return
+        isStarting = true
 
         // 1. Acquire MulticastLock to ensure mDNS packets are transmitted even under power save
         try {
             if (multicastLock == null) {
                 multicastLock = wifiManager?.createMulticastLock("bigeyes_airplay_multicast")?.apply {
-                    setReferenceCounted(true)
+                    setReferenceCounted(false)
                 }
             }
-            multicastLock?.acquire()
-            Log.d(TAG, "MulticastLock acquired for AirPlay mDNS")
+            if (multicastLock?.isHeld != true) {
+                multicastLock?.acquire()
+                Log.d(TAG, "MulticastLock acquired for AirPlay mDNS")
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to acquire MulticastLock: ${e.message}")
         }
@@ -57,8 +62,9 @@ class AirPlayDiscoveryService(
             setAttribute("vv", "2")
         }
 
-        registrationListener = object : NsdManager.RegistrationListener {
+        val listener = object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(registeredService: NsdServiceInfo) {
+                isStarting = false
                 isRegistered = true
                 Log.i(
                     TAG,
@@ -67,7 +73,9 @@ class AirPlayDiscoveryService(
             }
 
             override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
+                isStarting = false
                 isRegistered = false
+                releaseMulticastLock()
                 Log.e(TAG, "AirPlay service registration failed with errorCode: $errorCode")
             }
 
@@ -80,32 +88,42 @@ class AirPlayDiscoveryService(
                 Log.e(TAG, "AirPlay service unregistration failed with errorCode: $errorCode")
             }
         }
+        registrationListener = listener
 
         try {
             nsdManager?.registerService(
                 serviceInfo,
                 NsdManager.PROTOCOL_DNS_SD,
-                registrationListener
+                listener
             )
         } catch (e: Exception) {
+            isStarting = false
+            registrationListener = null
+            releaseMulticastLock()
             Log.e(TAG, "Exception during registerService", e)
         }
     }
 
+    @Synchronized
     fun stop() {
-        if (!isRegistered) return
+        isStarting = false
+        val listener = registrationListener
+        registrationListener = null
 
-        try {
-            registrationListener?.let {
-                nsdManager?.unregisterService(it)
+        if (listener != null) {
+            try {
+                nsdManager?.unregisterService(listener)
+            } catch (e: Exception) {
+                Log.e(TAG, "Exception during unregisterService", e)
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Exception during unregisterService", e)
-        } finally {
-            isRegistered = false
-            registrationListener = null
         }
+        isRegistered = false
+        releaseMulticastLock()
+    }
 
+    fun isServiceActive(): Boolean = isRegistered || isStarting
+
+    private fun releaseMulticastLock() {
         try {
             if (multicastLock?.isHeld == true) {
                 multicastLock?.release()

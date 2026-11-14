@@ -5,9 +5,11 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -20,6 +22,7 @@ import com.bigeyes.tv.player.model.PlaybackState
  * Concrete implementation of PlayerEngine backed by AndroidX Media3 ExoPlayer.
  * Robustly manages player lifecycle, intelligent buffering recovery, and UI attachment.
  */
+@OptIn(UnstableApi::class)
 class ExoPlayerEngine(private val context: Context) : PlayerEngine {
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -50,6 +53,24 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
     /** Anti-hotlink headers applied to every HTTP request of the current media. */
     @Volatile
     private var requestHeaders: Map<String, String> = emptyMap()
+
+    @Volatile
+    private var cachedSpeed: Float = 1.0f
+
+    @Volatile
+    private var cachedPositionMs: Long = 0L
+
+    @Volatile
+    private var cachedDurationMs: Long = 0L
+
+    @Volatile
+    private var cachedIsPlaying: Boolean = false
+
+    @Volatile
+    private var cachedIsReady: Boolean = false
+
+    @Volatile
+    private var cachedIsEnded: Boolean = false
 
     private var lastKnownPositionMs = 0L
     private var recoveryAttempts = 0
@@ -85,17 +106,30 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_READY || playbackState == Player.STATE_BUFFERING) {
-                    val position = exoPlayer?.currentPosition ?: 0L
+                syncSnapshotsOnMain(player)
+                if (playbackState == Player.STATE_READY) {
+                    val position = player.currentPosition
                     if (position > 0L) {
                         lastKnownPositionMs = position
                     }
                     resetRecovery()
+                } else if (playbackState == Player.STATE_BUFFERING) {
+                    val position = player.currentPosition
+                    if (position > 0L) {
+                        lastKnownPositionMs = position
+                    }
                 }
 
                 if (playbackState == Player.STATE_ENDED) {
+                    cachedIsEnded = true
+                    cachedIsPlaying = false
+                    cachedIsReady = false
+                    cancelRecovery()
                     cancelBufferingTimeout()
                     cancelAutoRetry()
+                    cancelBufferingShowIndicator()
+                    isBuffering = false
+                    bufferingStartTime = 0L
                     currentState = PlaybackState.COMPLETED
                     listener?.onEngineStateChanged(PlaybackState.COMPLETED)
                     listener?.onPlaybackCompleted()
@@ -104,8 +138,8 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
                 }
 
                 if (playbackState == Player.STATE_IDLE) {
-                    if (currentState == PlaybackState.LOADING) {
-                        // Suppress intermediate IDLE state while loading/preparing new media
+                    if (currentState == PlaybackState.LOADING || currentState == PlaybackState.BUFFERING) {
+                        // Suppress intermediate IDLE state while loading/preparing new media or waiting URL
                         return
                     }
                     if (currentState != PlaybackState.STOPPED && activeUrl != null && player.playerError != null) {
@@ -131,6 +165,7 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
+                syncSnapshotsOnMain(exoPlayer)
                 if (exoPlayer?.playbackState == Player.STATE_READY) {
                     val newState = if (isPlaying) PlaybackState.PLAYING else PlaybackState.PAUSED
                     val previousState = currentState
@@ -143,18 +178,20 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                syncSnapshotsOnMain(exoPlayer)
                 val msg = error.message ?: "Playback error: ${error.errorCodeName}"
                 Log.e(TAG, "ExoPlayer error: $msg (code: ${error.errorCode})", error)
                 cancelBufferingTimeout()
                 cancelAutoRetry()
+                cancelBufferingShowIndicator()
+                isBuffering = false
 
-                val cause = error.cause
+                val httpCause = findHttpInvalidResponseCodeException(error)
                 val isHttp4xx = error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS ||
-                        (cause is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException &&
-                                cause.responseCode in 400..499)
+                    (httpCause != null && httpCause.responseCode in 400..499)
 
                 if (isHttp4xx) {
-                    val httpCode = (cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.responseCode
+                    val httpCode = httpCause?.responseCode
                     val userMsg = "视频地址已失效或受防盗链保护 (HTTP ${httpCode ?: 403})，请在手机端重新嗅探投屏"
                     Log.w(TAG, "Fast-failing HTTP 4xx error without recovery: $userMsg")
                     notifyError(userMsg)
@@ -167,6 +204,7 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
                 }
                 exoPlayer?.currentPosition?.takeIf { it > 0L }?.let {
                     lastKnownPositionMs = it
+                    cachedPositionMs = it
                 }
                 scheduleRecovery()
             }
@@ -265,35 +303,46 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
     }
 
     override fun manualRetry() {
-        Log.i(TAG, "Manual retry requested")
-        autoRetryCount = 0
-        cancelBufferingTimeout()
-        cancelAutoRetry()
+        runOnMain {
+            Log.i(TAG, "Manual retry requested")
+            autoRetryCount = 0
+            cancelBufferingTimeout()
+            cancelAutoRetry()
+            cancelBufferingShowIndicator()
 
-        if (activeUrl != null) {
-            isBuffering = true
-            listener?.onBufferingStateChanged(true, "正在重新连接...")
-            attemptRecovery()
+            if (activeUrl != null) {
+                isBuffering = true
+                listener?.onBufferingStateChanged(true, "正在重新连接...")
+                attemptRecovery()
+            }
         }
     }
 
     override fun play(url: String, startPositionMs: Long) {
         Log.i(TAG, "Engine play url=$url, startPositionMs=$startPositionMs")
+        val safeStartPos = startPositionMs.coerceAtLeast(0L)
         currentUrl = url
         activeUrl = url
-        lastKnownPositionMs = startPositionMs.coerceAtLeast(0L)
+        lastKnownPositionMs = safeStartPos
+        cachedPositionMs = safeStartPos
+        cachedDurationMs = 0L
+        cachedIsPlaying = false
+        cachedIsReady = false
+        cachedIsEnded = false
         resetRecovery()
         cancelBufferingTimeout()
         cancelAutoRetry()
+        cancelBufferingShowIndicator()
         autoRetryCount = 0
         isBuffering = false
         bufferingStartTime = 0L
+        resumePlaybackOnFirstFrame = false
 
         runOnMain {
             initPlayerOnMainThread()
             val player = exoPlayer ?: return@runOnMain
             try {
-                prepareCurrentMediaItem(player, startPositionMs)
+                prepareCurrentMediaItem(player, safeStartPos)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start playback for $url", e)
                 notifyError("Play error: ${e.message}")
@@ -303,7 +352,9 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
 
     override fun pause() {
         runOnMain {
+            resumePlaybackOnFirstFrame = false
             exoPlayer?.playWhenReady = false
+            syncSnapshotsOnMain(exoPlayer)
         }
     }
 
@@ -330,20 +381,31 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
             } else {
                 player.playWhenReady = true
             }
+            syncSnapshotsOnMain(player)
         }
     }
 
     override fun stop() {
         currentUrl = null
         activeUrl = null
+        resumePlaybackOnFirstFrame = false
         cancelRecovery()
         cancelBufferingTimeout()
         cancelAutoRetry()
+        cancelBufferingShowIndicator()
         autoRetryCount = 0
         isBuffering = false
         bufferingStartTime = 0L
+        lastKnownPositionMs = 0L
+        cachedPositionMs = 0L
+        cachedDurationMs = 0L
+        cachedSpeed = 1.0f
+        cachedIsPlaying = false
+        cachedIsReady = false
+        cachedIsEnded = false
 
         runOnMain {
+            exoPlayer?.setPlaybackSpeed(1.0f)
             exoPlayer?.stop()
             exoPlayer?.clearMediaItems()
             currentState = PlaybackState.STOPPED
@@ -351,11 +413,39 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
         }
     }
 
-    override fun seekTo(positionMs: Long) {
+    override fun resetForPendingUrl() {
+        currentUrl = null
+        activeUrl = null
+        resumePlaybackOnFirstFrame = false
+        cancelRecovery()
+        cancelBufferingTimeout()
+        cancelAutoRetry()
+        cancelBufferingShowIndicator()
+        autoRetryCount = 0
+        isBuffering = true
+        bufferingStartTime = 0L
+        lastKnownPositionMs = 0L
+        cachedPositionMs = 0L
+        cachedDurationMs = 0L
+        cachedIsPlaying = false
+        cachedIsReady = false
+        cachedIsEnded = false
+
         runOnMain {
-            val safePos = positionMs.coerceAtLeast(0L)
-            lastKnownPositionMs = safePos
+            currentState = PlaybackState.BUFFERING
+            exoPlayer?.stop()
+            exoPlayer?.clearMediaItems()
+            listener?.onEngineStateChanged(PlaybackState.BUFFERING)
+        }
+    }
+
+    override fun seekTo(positionMs: Long) {
+        val safePos = positionMs.coerceAtLeast(0L)
+        lastKnownPositionMs = safePos
+        cachedPositionMs = safePos
+        runOnMain {
             exoPlayer?.seekTo(safePos)
+            syncSnapshotsOnMain(exoPlayer)
         }
     }
 
@@ -363,44 +453,73 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
         runOnMain {
             activeUrl = null
             currentUrl = null
+            resumePlaybackOnFirstFrame = false
             cancelRecovery()
             cancelBufferingTimeout()
             cancelAutoRetry()
+            cancelBufferingShowIndicator()
+            cachedIsPlaying = false
+            cachedIsReady = false
+            cachedIsEnded = false
             exoPlayer?.release()
             exoPlayer = null
         }
     }
 
     override fun setPlaybackSpeed(speed: Float) {
+        val safeSpeed = speed.coerceIn(0.25f, 4.0f)
+        cachedSpeed = safeSpeed
         runOnMain {
-            exoPlayer?.setPlaybackSpeed(speed)
+            exoPlayer?.setPlaybackSpeed(safeSpeed)
+            syncSnapshotsOnMain(exoPlayer)
         }
     }
 
     override fun getPlaybackSpeed(): Float {
-        return exoPlayer?.playbackParameters?.speed ?: 1.0f
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            exoPlayer?.playbackParameters?.speed?.let { cachedSpeed = it }
+        }
+        return cachedSpeed
     }
 
     override fun getCurrentPositionMs(): Long {
-        val pos = exoPlayer?.currentPosition ?: 0L
-        return if (pos > 0) pos else 0L
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            val pos = exoPlayer?.currentPosition ?: cachedPositionMs
+            cachedPositionMs = if (pos > 0L) pos else 0L
+        }
+        return cachedPositionMs
     }
 
     override fun getDurationMs(): Long {
-        val dur = exoPlayer?.duration ?: 0L
-        return if (dur > 0) dur else 0L
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            val dur = exoPlayer?.duration ?: cachedDurationMs
+            if (dur > 0L) {
+                cachedDurationMs = dur
+            }
+        }
+        return cachedDurationMs
     }
 
     override fun isPlaying(): Boolean {
-        return exoPlayer?.isPlaying ?: false
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            cachedIsPlaying = exoPlayer?.isPlaying ?: false
+        }
+        return cachedIsPlaying
     }
 
     override fun isEnded(): Boolean {
-        return currentState == PlaybackState.COMPLETED || exoPlayer?.playbackState == Player.STATE_ENDED
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            cachedIsEnded = currentState == PlaybackState.COMPLETED ||
+                exoPlayer?.playbackState == Player.STATE_ENDED
+        }
+        return cachedIsEnded
     }
 
     override fun isReady(): Boolean {
-        return exoPlayer?.playbackState == Player.STATE_READY
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            cachedIsReady = exoPlayer?.playbackState == Player.STATE_READY
+        }
+        return cachedIsReady
     }
 
     override fun attachPlayerView(playerView: PlayerView) {
@@ -412,7 +531,7 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
                 activeUrl?.let {
                     prepareCurrentMediaItem(player, lastKnownPositionMs)
                 }
-            } else if (!player.isPlaying) {
+            } else if (player.playWhenReady && player.playbackState != Player.STATE_ENDED && !player.isPlaying) {
                 resumePlaybackOnFirstFrame = true
                 player.seekTo(player.currentPosition.coerceAtLeast(0L))
             }
@@ -502,7 +621,45 @@ class ExoPlayerEngine(private val context: Context) : PlayerEngine {
         autoRetryRunnable = null
     }
 
+    private fun cancelBufferingShowIndicator() {
+        bufferingShowIndicatorRunnable?.let { mainHandler.removeCallbacks(it) }
+        bufferingShowIndicatorRunnable = null
+    }
+
+    private fun syncSnapshotsOnMain(player: ExoPlayer?) {
+        if (player == null) {
+            cachedIsPlaying = false
+            cachedIsReady = false
+            return
+        }
+        val pos = player.currentPosition
+        if (pos >= 0L) cachedPositionMs = pos
+        val dur = player.duration
+        if (dur > 0L) cachedDurationMs = dur
+        cachedSpeed = player.playbackParameters.speed
+        cachedIsPlaying = player.isPlaying
+        cachedIsReady = player.playbackState == Player.STATE_READY
+        cachedIsEnded = currentState == PlaybackState.COMPLETED || player.playbackState == Player.STATE_ENDED
+    }
+
+    private fun findHttpInvalidResponseCodeException(
+        root: Throwable?
+    ): androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException? {
+        var cursor = root
+        var depth = 0
+        while (cursor != null && depth < 12) {
+            if (cursor is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException) {
+                return cursor
+            }
+            cursor = cursor.cause
+            depth++
+        }
+        return null
+    }
+
     private fun notifyError(message: String) {
+        cachedIsPlaying = false
+        cachedIsReady = false
         currentState = PlaybackState.ERROR
         listener?.onError(message)
     }

@@ -31,6 +31,8 @@ class SsdpServer(
 
     private var multicastLock: WifiManager.MulticastLock? = null
     private var multicastSocket: MulticastSocket? = null
+    private val socketSendLock = Any()
+    @Volatile
     private var isRunning = false
     private var listenThread: Thread? = null
     private var notifyExecutor: ScheduledExecutorService? = null
@@ -112,38 +114,56 @@ class SsdpServer(
         Log.i(TAG, "SSDP server stopped.")
     }
 
+    /**
+     * Rejoins multicast groups and re-announces presence after a Wi-Fi / LAN interface change.
+     */
+    fun refreshNetworkBinding() {
+        val socket = multicastSocket ?: return
+        if (!isRunning || socket.isClosed) return
+        notifyExecutor?.execute {
+            try {
+                joinMulticastGroups(socket)
+                sendAliveNotify()
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to refresh SSDP network binding: ${e.message}")
+            }
+        }
+    }
+
+    private fun joinMulticastGroups(socket: MulticastSocket) {
+        val group = InetAddress.getByName(SSDP_MULTICAST_GROUP)
+        val groupAddress = InetSocketAddress(group, SSDP_PORT)
+        try {
+            val interfaces = NetworkInterface.getNetworkInterfaces()
+            while (interfaces != null && interfaces.hasMoreElements()) {
+                val netIf = interfaces.nextElement()
+                if (netIf.isUp && !netIf.isLoopback && netIf.supportsMulticast()) {
+                    try {
+                        socket.joinGroup(groupAddress, netIf)
+                        Log.d(TAG, "Joined SSDP multicast group on interface: ${netIf.name}")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to join multicast on ${netIf.name}: ${e.message}")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Interface enumeration error: ${e.message}")
+        }
+
+        // Fallback joinGroup for generic network stack
+        try {
+            socket.joinGroup(group)
+        } catch (_: Exception) {}
+    }
+
     private fun runListener() {
         try {
-            val group = InetAddress.getByName(SSDP_MULTICAST_GROUP)
             val socket = MulticastSocket(null).apply {
                 reuseAddress = true
                 bind(InetSocketAddress(SSDP_PORT))
             }
             multicastSocket = socket
-
-            // Explicitly join multicast group on all active non-loopback network interfaces
-            val groupAddress = InetSocketAddress(group, SSDP_PORT)
-            try {
-                val interfaces = NetworkInterface.getNetworkInterfaces()
-                while (interfaces != null && interfaces.hasMoreElements()) {
-                    val netIf = interfaces.nextElement()
-                    if (netIf.isUp && !netIf.isLoopback && netIf.supportsMulticast()) {
-                        try {
-                            socket.joinGroup(groupAddress, netIf)
-                            Log.d(TAG, "Joined SSDP multicast group on interface: ${netIf.name}")
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Failed to join multicast on ${netIf.name}: ${e.message}")
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Interface enumeration error: ${e.message}")
-            }
-
-            // Fallback joinGroup for generic network stack
-            try {
-                socket.joinGroup(group)
-            } catch (_: Exception) {}
+            joinMulticastGroups(socket)
 
             val buffer = ByteArray(4096)
             while (isRunning && !socket.isClosed) {
@@ -221,7 +241,9 @@ CONTENT-LENGTH: 0
         try {
             val bytes = response.toByteArray(Charsets.UTF_8)
             val packet = DatagramPacket(bytes, bytes.size, remoteAddress, remotePort)
-            multicastSocket?.send(packet)
+            synchronized(socketSendLock) {
+                multicastSocket?.send(packet)
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to send M-SEARCH response to $remoteAddress:$remotePort: ${e.message}")
         }
@@ -282,7 +304,9 @@ USN: $usn
             val bytes = message.toByteArray(Charsets.UTF_8)
             val group = InetAddress.getByName(SSDP_MULTICAST_GROUP)
             val packet = DatagramPacket(bytes, bytes.size, group, SSDP_PORT)
-            multicastSocket?.send(packet)
+            synchronized(socketSendLock) {
+                multicastSocket?.send(packet)
+            }
         } catch (e: Exception) {
             // ignore
         }

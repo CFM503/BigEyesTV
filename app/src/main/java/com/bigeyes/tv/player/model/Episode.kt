@@ -24,16 +24,23 @@ data class Episode(
 ) : Serializable {
 
     fun toDisplayTitle(): String {
+        val cleanSeries = seriesTitle.trim()
+        val rawEpTitle = episodeTitle.trim()
+        val cleanEpTitle = if (rawEpTitle.equals(cleanSeries, ignoreCase = true)) "" else rawEpTitle
         val epNumStr = if (episodeNumber > 0) "第${episodeNumber}集" else ""
+        val epTitleHasNumber = episodeNumber > 0 && Regex("""第\s*0*${episodeNumber}\s*[集话期]""").containsMatchIn(cleanEpTitle)
+
         return when {
-            seriesTitle.isNotBlank() && epNumStr.isNotBlank() && episodeTitle.isNotBlank() ->
-                "$seriesTitle $epNumStr - $episodeTitle"
-            seriesTitle.isNotBlank() && epNumStr.isNotBlank() ->
-                "$seriesTitle $epNumStr"
-            seriesTitle.isNotBlank() && episodeTitle.isNotBlank() ->
-                "$seriesTitle - $episodeTitle"
-            episodeTitle.isNotBlank() -> episodeTitle
-            seriesTitle.isNotBlank() -> seriesTitle
+            cleanSeries.isNotBlank() && cleanEpTitle.isNotBlank() && epTitleHasNumber ->
+                "$cleanSeries $cleanEpTitle"
+            cleanSeries.isNotBlank() && epNumStr.isNotBlank() && cleanEpTitle.isNotBlank() ->
+                "$cleanSeries $epNumStr - $cleanEpTitle"
+            cleanSeries.isNotBlank() && epNumStr.isNotBlank() ->
+                "$cleanSeries $epNumStr"
+            cleanSeries.isNotBlank() && cleanEpTitle.isNotBlank() ->
+                "$cleanSeries - $cleanEpTitle"
+            cleanEpTitle.isNotBlank() -> cleanEpTitle
+            cleanSeries.isNotBlank() -> cleanSeries
             epNumStr.isNotBlank() -> epNumStr
             else -> "视频播放"
         }

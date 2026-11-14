@@ -2,8 +2,12 @@ package com.bigeyes.tv.ui
 
 import android.Manifest
 import android.app.ProgressDialog
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
@@ -13,16 +17,19 @@ import android.util.Log
 import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
-import android.widget.Button
 import android.widget.SeekBar
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.OptIn
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.media3.common.util.UnstableApi
+import com.bigeyes.tv.R
 import com.bigeyes.tv.config.TvPlayerConfig
 import com.bigeyes.tv.databinding.ActivityMainBinding
 import com.bigeyes.tv.player.command.PlaybackCommand
@@ -71,6 +78,15 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
 
     private var currentSpeedIndex = 0
     private var currentAspectRatioIndex = 0
+    private var isServiceStatusReceiverRegistered = false
+
+    private val serviceStatusReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == TvReceiverService.ACTION_SERVICE_STATUS_CHANGED) {
+                updateDeviceInfo()
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -98,6 +114,12 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
 
         // Handle initial intent
         handleIncomingIntent(intent)
+
+        binding.btnRefreshService.setOnClickListener {
+            TvReceiverService.refreshServers(this)
+            Toast.makeText(this, "正在刷新投屏服务与网络状态...", Toast.LENGTH_SHORT).show()
+            mainHandler.postDelayed({ updateDeviceInfo() }, RECEIVER_START_CHECK_DELAY_MS)
+        }
 
         binding.btnCheckUpdate.setOnClickListener {
             checkAppUpdate(isManual = true)
@@ -164,15 +186,26 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
         updateServiceBadges()
     }
 
-    /** Reflects the real receiver state instead of a hard-coded "在线" label. */
+    /** Reflects the real per-protocol receiver state instead of a hard-coded "在线" label. */
     private fun updateServiceBadges() {
-        val running = TvReceiverService.isRunning
-        val suffix = if (running) "在线" else "离线"
-        val background = if (running) BADGE_ONLINE_COLOR else BADGE_OFFLINE_COLOR
-        binding.badgeDlna.text = "DLNA: $suffix"
-        binding.badgeAirPlay.text = "AirPlay: $suffix"
-        binding.badgeDlna.setBackgroundColor(background)
-        binding.badgeAirPlay.setBackgroundColor(background)
+        val companionOk = TvReceiverService.httpServerOnline
+        val dlnaOk = TvReceiverService.dlnaOnline && companionOk
+        val airPlayOk = TvReceiverService.airPlayOnline && companionOk
+
+        applyBadgeState(binding.badgeCompanion, "伴侣直连", companionOk, BADGE_COMPANION_ONLINE_COLOR)
+        applyBadgeState(binding.badgeDlna, "DLNA", dlnaOk, BADGE_ONLINE_COLOR)
+        applyBadgeState(binding.badgeAirPlay, "AirPlay", airPlayOk, BADGE_AIRPLAY_ONLINE_COLOR)
+    }
+
+    private fun applyBadgeState(
+        badge: android.widget.TextView,
+        label: String,
+        online: Boolean,
+        onlineColor: Int
+    ) {
+        badge.text = "$label: ${if (online) "在线" else "离线"}"
+        val color = if (online) onlineColor else BADGE_OFFLINE_COLOR
+        ViewCompat.setBackgroundTintList(badge, ColorStateList.valueOf(color))
     }
 
     private fun observePlaybackSession() {
@@ -191,18 +224,36 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
         binding.tvOverlayTitle.text = ep?.toDisplayTitle() ?: if (!session.isIdle) "正在播放" else "大屏播放器"
         updateOverlayClock()
 
-        // 2. Play/Pause Button
+        // 2. Play/Pause Button (label + matching icon)
         binding.btnOverlayPlayPause.text = if (session.isPlaying) "暂停" else "播放"
+        val playPauseIconRes = if (session.isPlaying) R.drawable.ic_pause else R.drawable.ic_play
+        binding.btnOverlayPlayPause.setCompoundDrawablesRelativeWithIntrinsicBounds(playPauseIconRes, 0, 0, 0)
 
-        // 3. Next / Previous / Episode List visibility & status
+        // 3. Next / Previous / Episode List visibility & focus guard
         val queue = controller.episodeQueue
+        val hadFocusOnHiddenOverlayBtn =
+            (!queue.hasPrevious() && binding.btnOverlayPrevEpisode.hasFocus()) ||
+                (!queue.hasNext() && binding.btnOverlayNextEpisode.hasFocus()) ||
+                (queue.size <= 1 && binding.btnOverlayEpisodeList.hasFocus())
         binding.btnOverlayPrevEpisode.visibility = if (queue.hasPrevious()) View.VISIBLE else View.GONE
         binding.btnOverlayNextEpisode.visibility = if (queue.hasNext()) View.VISIBLE else View.GONE
         binding.btnOverlayEpisodeList.visibility = if (queue.size > 1) View.VISIBLE else View.GONE
+        if (hadFocusOnHiddenOverlayBtn && isOverlayVisible()) {
+            binding.btnOverlayPlayPause.requestFocus()
+        }
+
         binding.btnOverlayAutoPlay.text = if (session.autoPlayNext) "连播: 开" else "连播: 关"
         binding.btnOverlayAutoPlay.setTextColor(if (session.autoPlayNext) Color.parseColor("#FFD700") else Color.WHITE)
 
-        // 4. Speed
+        // 4. Speed (sync currentSpeedIndex from session when not temporarily holding 0.5x/3.0x)
+        if (!isHoldingSpeed) {
+            val matchedIndex = TvPlayerConfig.PlaybackOptions.SPEED_OPTIONS.indexOfFirst {
+                kotlin.math.abs(it - session.speed) < 0.01f
+            }
+            if (matchedIndex >= 0) {
+                currentSpeedIndex = matchedIndex
+            }
+        }
         val speedText = String.format(Locale.US, "%.2fx", session.speed)
         binding.btnOverlaySpeed.text = "倍速 $speedText"
 
@@ -250,12 +301,15 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
 
                 binding.layoutPlaybackEnd.visibility = View.VISIBLE
                 binding.layoutPlaybackError.visibility = View.GONE
+                binding.btnEndEpisodeList.visibility = if (queue.size > 1) View.VISIBLE else View.GONE
 
-                if (session.isLastEpisode) {
+                if (session.isLastEpisode || !queue.hasNext()) {
                     binding.tvEndTitle.text = "全剧播放完毕"
                     binding.tvEndSubtitle.text = "所有剧集已播放结束"
                     binding.btnEndNextEpisode.visibility = View.GONE
-                    binding.btnEndReplay.requestFocus()
+                    if (!binding.btnEndReplay.hasFocus() && !binding.btnEndEpisodeList.hasFocus() && !binding.btnEndExit.hasFocus()) {
+                        binding.btnEndReplay.requestFocus()
+                    }
                 } else {
                     binding.tvEndTitle.text = "播放结束"
                     binding.tvEndSubtitle.text = "当前集已播放完毕"
@@ -285,9 +339,16 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
                     binding.tvErrorMessage.text = session.errorMessage ?: "视频地址加载失败，请重试"
                 }
 
+                val hadFocusOnHiddenErrorBtn =
+                    (!queue.hasPrevious() && binding.btnErrorPrevious.hasFocus()) ||
+                        (!queue.hasNext() && binding.btnErrorNext.hasFocus())
                 binding.btnErrorPrevious.visibility = if (queue.hasPrevious()) View.VISIBLE else View.GONE
                 binding.btnErrorNext.visibility = if (queue.hasNext()) View.VISIBLE else View.GONE
-                binding.btnErrorRetry.requestFocus()
+                if (hadFocusOnHiddenErrorBtn ||
+                    (!binding.btnErrorPrevious.hasFocus() && !binding.btnErrorNext.hasFocus() && !binding.btnErrorExit.hasFocus())
+                ) {
+                    binding.btnErrorRetry.requestFocus()
+                }
             }
             PlaybackState.IDLE, PlaybackState.STOPPED -> {
                 exitConfirmDialog?.dismiss()
@@ -319,6 +380,7 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
         }
     }
 
+    @OptIn(UnstableApi::class)
     private fun setupOverlayControls() {
         // Progress Bar (SeekBar) Focus & Interaction
         binding.overlaySeekBar.setOnFocusChangeListener { _, hasFocus ->
@@ -566,6 +628,8 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
         if (binding.playerView.visibility != View.VISIBLE) return
         isHoldingSpeed = true
         controller.dispatch(PlaybackCommand.SetSpeed(speed))
+        val iconRes = if (speed >= 1.0f) R.drawable.ic_fast_forward else R.drawable.ic_slow_motion
+        binding.ivSpeedHudIcon.setImageResource(iconRes)
         binding.tvSpeedHudText.text = hudText
         binding.speedHudLayout.visibility = View.VISIBLE
     }
@@ -573,7 +637,8 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
     override fun deactivateHoldingSpeed() {
         if (!isHoldingSpeed) return
         isHoldingSpeed = false
-        val normalSpeed = TvPlayerConfig.PlaybackOptions.SPEED_OPTIONS[currentSpeedIndex]
+        val speedOptions = TvPlayerConfig.PlaybackOptions.SPEED_OPTIONS
+        val normalSpeed = speedOptions[currentSpeedIndex.coerceIn(0, speedOptions.lastIndex)]
         controller.dispatch(PlaybackCommand.SetSpeed(normalSpeed))
         binding.speedHudLayout.visibility = View.GONE
     }
@@ -774,7 +839,9 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
         binding.playerView.visibility = View.GONE
         binding.standbyLayout.visibility = View.VISIBLE
         updateDeviceInfo()
-        binding.btnCheckUpdate.requestFocus()
+        if (!binding.btnRefreshService.hasFocus() && !binding.btnCheckUpdate.hasFocus()) {
+            binding.btnRefreshService.requestFocus()
+        }
     }
 
     // ==================== Update Checking ====================
@@ -876,6 +943,7 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
             controller = live
             remoteController = TvRemoteController(controller, this)
         }
+        registerServiceStatusReceiver()
         controller.attachPlayerView(binding.playerView)
     }
 
@@ -886,11 +954,34 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
     }
 
     override fun onStop() {
+        unregisterServiceStatusReceiver()
         controller.detachPlayerView(binding.playerView)
         super.onStop()
     }
 
+    private fun registerServiceStatusReceiver() {
+        if (isServiceStatusReceiverRegistered) return
+        val filter = IntentFilter(TvReceiverService.ACTION_SERVICE_STATUS_CHANGED)
+        ContextCompat.registerReceiver(
+            this,
+            serviceStatusReceiver,
+            filter,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+        isServiceStatusReceiverRegistered = true
+    }
+
+    private fun unregisterServiceStatusReceiver() {
+        if (!isServiceStatusReceiverRegistered) return
+        try {
+            unregisterReceiver(serviceStatusReceiver)
+        } catch (_: Exception) {
+        }
+        isServiceStatusReceiverRegistered = false
+    }
+
     override fun onDestroy() {
+        unregisterServiceStatusReceiver()
         exitConfirmDialog?.dismiss()
         exitConfirmDialog = null
         episodeListDialog?.dismiss()
@@ -902,6 +993,7 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
 
         remoteController.cleanup()
         hideOverlay()
+        updateManager.shutdown()
         super.onDestroy()
     }
 
@@ -910,6 +1002,8 @@ class MainActivity : AppCompatActivity(), TvRemoteController.RemoteCallback {
         private const val PREFS_PERMISSIONS = "bigeyes_tv_permissions"
         private const val KEY_NOTIFICATION_PERMISSION_ASKED = "post_notifications_asked"
         private const val BADGE_ONLINE_COLOR = 0xFF2E7D32.toInt()
+        private const val BADGE_AIRPLAY_ONLINE_COLOR = 0xFF1565C0.toInt()
+        private const val BADGE_COMPANION_ONLINE_COLOR = 0xFF00838F.toInt()
         private const val BADGE_OFFLINE_COLOR = 0xFF757575.toInt()
         private const val RECEIVER_START_CHECK_DELAY_MS = 500L
     }

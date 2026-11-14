@@ -1,34 +1,39 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="140dp"
-    android:layout_height="72dp"
-    android:layout_margin="8dp"
+    android:layout_width="match_parent"
+    android:layout_height="76dp"
+    android:layout_margin="6dp"
     android:background="@drawable/bg_tv_button"
     android:clickable="true"
     android:focusable="true"
     android:focusableInTouchMode="true"
     android:gravity="center"
     android:orientation="vertical"
-    android:padding="8dp">
+    android:paddingStart="10dp"
+    android:paddingTop="8dp"
+    android:paddingEnd="10dp"
+    android:paddingBottom="8dp">
 
     <TextView
         android:id="@+id/tvEpisodeNumber"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:text="第 1 集"
         android:textColor="@color/white"
-        android:textSize="18sp"
-        android:textStyle="bold"
-        android:text="第 1 集" />
+        android:textSize="17sp"
+        android:textStyle="bold" />
 
     <TextView
         android:id="@+id/tvEpisodeTitle"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="2dp"
+        android:layout_marginTop="3dp"
         android:ellipsize="end"
         android:maxLines="1"
+        android:text=""
         android:textColor="@color/text_secondary"
-        android:textSize="12sp"
-        android:text="" />
+        android:textSize="12sp" />
 
 </LinearLayout>

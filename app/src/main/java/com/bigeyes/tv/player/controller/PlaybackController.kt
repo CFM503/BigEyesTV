@@ -54,6 +54,8 @@ class PlaybackController private constructor(
 
     private var progressTickerRunnable: Runnable? = null
     private var resolveTimeoutRunnable: Runnable? = null
+    private var switchTimeoutRunnable: Runnable? = null
+    private var countdownCancelledGenerationId: Long = -1L
 
     init {
         playerEngine.setListener(this)
@@ -95,7 +97,14 @@ class PlaybackController private constructor(
                 command.queue,
                 command.startIndex,
                 command.startPositionMs,
-                command.autoPlayNext
+                command.autoPlayNext,
+                command.resumeFromHistory
+            )
+            is PlaybackCommand.UpdateEpisodeUrl -> handleUpdateEpisodeUrl(
+                command.episodeIndex,
+                command.playUrl,
+                command.headers,
+                command.positionMs
             )
             is PlaybackCommand.CancelCountdown -> handleCancelCountdown()
             is PlaybackCommand.SetAutoPlayNext -> handleSetAutoPlayNext(command.enabled)
@@ -142,6 +151,10 @@ class PlaybackController private constructor(
 
     private fun handleStop() {
         saveCurrentProgressToHistory()
+        cancelResolveTimeout()
+        cancelSwitchUnlock()
+        countdownCancelledGenerationId = -1L
+        playerEngine.setPlaybackSpeed(1.0f)
         playerEngine.stop()
         completionGuard.reset()
         isSwitchingEpisode.set(false)
@@ -151,12 +164,14 @@ class PlaybackController private constructor(
                 playbackState = PlaybackState.STOPPED,
                 position = 0L,
                 duration = 0L,
+                speed = 1.0f,
                 countdownRemainingSeconds = null,
                 currentEpisode = null,
                 seriesId = "",
                 seriesTitle = "",
                 currentIndex = 0,
                 isLastEpisode = true,
+                errorMessage = null,
                 playbackHint = null,
                 retryAttempt = 0,
                 retryMax = 0,
@@ -253,12 +268,18 @@ class PlaybackController private constructor(
         queue: List<Episode>,
         startIndex: Int,
         startPositionMs: Long,
-        autoPlayNext: Boolean
+        autoPlayNext: Boolean,
+        resumeFromHistory: Boolean = true
     ) {
         if (queue.isEmpty()) {
             Log.w(TAG, "Cannot play empty queue.")
             return
         }
+        cancelResolveTimeout()
+        cancelSwitchUnlock()
+        isSwitchingEpisode.set(false)
+        countdownCancelledGenerationId = -1L
+
         saveCurrentProgressToHistory()
         episodeQueue.setQueue(queue, startIndex)
         val ep = episodeQueue.current() ?: queue[0]
@@ -276,15 +297,55 @@ class PlaybackController private constructor(
 
         val resumePos = if (startPositionMs > 0L) {
             startPositionMs
-        } else {
+        } else if (resumeFromHistory) {
             resolveResumePosition(ep)
+        } else {
+            0L
         }
 
         playEpisodeInternal(ep, resumePos)
     }
 
+    private fun handleUpdateEpisodeUrl(
+        episodeIndex: Int,
+        playUrl: String,
+        headers: Map<String, String>?,
+        positionMs: Long?
+    ) {
+        val previousEp = episodeQueue.getEpisode(episodeIndex)
+        if (!episodeQueue.updateEpisodeUrl(episodeIndex, playUrl, headers)) {
+            Log.w(TAG, "updateEpisodeUrl ignored: invalid index=$episodeIndex, size=${episodeQueue.size}")
+            return
+        }
+
+        val updatedEp = episodeQueue.getEpisode(episodeIndex) ?: return
+        Log.i(TAG, "Updated episode[$episodeIndex] URL non-destructively (hasUrl=${playUrl.isNotBlank()})")
+
+        if (episodeIndex == episodeQueue.currentIndex) {
+            val curSession = _session.value
+            val wasWaitingOrBroken = previousEp?.playUrl.isNullOrBlank() ||
+                curSession.playbackState == PlaybackState.BUFFERING ||
+                curSession.playbackState == PlaybackState.LOADING ||
+                curSession.playbackState == PlaybackState.ERROR
+
+            _session.update {
+                it.copy(
+                    currentEpisode = updatedEp,
+                    duration = if (updatedEp.duration > 0L) updatedEp.duration else it.duration
+                )
+            }
+
+            if (playUrl.isNotBlank() && wasWaitingOrBroken) {
+                cancelResolveTimeout()
+                val startPos = (positionMs ?: curSession.position).coerceAtLeast(0L)
+                playEpisodeInternal(updatedEp, startPos)
+            }
+        }
+    }
+
     private fun handleCancelCountdown() {
         Log.i(TAG, "User cancelled auto next countdown.")
+        countdownCancelledGenerationId = completionGuard.getCurrentGenerationId()
         _session.update {
             it.copy(
                 countdownRemainingSeconds = null
@@ -310,6 +371,8 @@ class PlaybackController private constructor(
 
     private fun playEpisodeInternal(episode: Episode, startPositionMs: Long) {
         val generationId = completionGuard.nextGeneration()
+        countdownCancelledGenerationId = -1L
+        cancelSwitchUnlock()
         Log.i(TAG, "Starting episode: gen=$generationId, ep=${episode.episodeNumber}, url=${episode.playUrl}, pos=$startPositionMs")
 
         if (episode.playUrl.isBlank()) {
@@ -321,8 +384,8 @@ class PlaybackController private constructor(
                     currentEpisode = episode,
                     currentIndex = episodeQueue.currentIndex,
                     playbackState = PlaybackState.BUFFERING,
-                    position = startPositionMs,
-                    duration = episode.duration,
+                    position = 0L,
+                    duration = episode.duration.coerceAtLeast(0L),
                     countdownRemainingSeconds = null,
                     errorMessage = null,
                     isLastEpisode = episodeQueue.isLast(),
@@ -332,7 +395,7 @@ class PlaybackController private constructor(
                     isNetworkInterrupted = false
                 )
             }
-            playerEngine.pause()
+            playerEngine.resetForPendingUrl()
             isSwitchingEpisode.set(false)
             scheduleResolveTimeout(generationId, episode)
             return
@@ -363,10 +426,24 @@ class PlaybackController private constructor(
         playerEngine.setRequestHeaders(episode.headers)
         playerEngine.play(episode.playUrl, startPositionMs)
 
-        // Safety fallback to unlock switching mutex after delay
-        mainHandler.postDelayed({
-            isSwitchingEpisode.set(false)
-        }, 3000L)
+        scheduleSwitchUnlock(generationId)
+    }
+
+    private fun scheduleSwitchUnlock(generationId: Long) {
+        cancelSwitchUnlock()
+        val unlockRunnable = Runnable {
+            switchTimeoutRunnable = null
+            if (completionGuard.getCurrentGenerationId() == generationId) {
+                isSwitchingEpisode.set(false)
+            }
+        }
+        switchTimeoutRunnable = unlockRunnable
+        mainHandler.postDelayed(unlockRunnable, 3000L)
+    }
+
+    private fun cancelSwitchUnlock() {
+        switchTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+        switchTimeoutRunnable = null
     }
 
     private fun resolveResumePosition(episode: Episode): Long {
@@ -404,6 +481,7 @@ class PlaybackController private constructor(
     }
 
     override fun onPlaybackStarted(url: String) {
+        cancelSwitchUnlock()
         isSwitchingEpisode.set(false)
         _session.update {
             it.copy(
@@ -428,6 +506,7 @@ class PlaybackController private constructor(
         }
 
         saveCurrentProgressToHistory()
+        cancelSwitchUnlock()
         isSwitchingEpisode.set(false)
 
         if (current.autoPlayNext && episodeQueue.hasNext()) {
@@ -452,6 +531,7 @@ class PlaybackController private constructor(
     }
 
     override fun onError(error: String) {
+        cancelSwitchUnlock()
         isSwitchingEpisode.set(false)
         Log.e(TAG, "Playback error received from engine: $error")
         _session.update {
@@ -551,8 +631,12 @@ class PlaybackController private constructor(
     }
 
     private fun updateProgressAndCountdown() {
-        val state = _session.value.playbackState
+        val current = _session.value
+        val state = current.playbackState
         if (state != PlaybackState.PLAYING && state != PlaybackState.PAUSED && state != PlaybackState.BUFFERING) {
+            return
+        }
+        if (current.currentEpisode?.playUrl.isNullOrBlank()) {
             return
         }
 
@@ -561,10 +645,16 @@ class PlaybackController private constructor(
 
         // 10-Second Countdown logic
         val remainingMs = dur - pos
-        val autoNext = _session.value.autoPlayNext
+        val autoNext = current.autoPlayNext
         val hasNext = episodeQueue.hasNext()
+        val isCountdownCancelled = countdownCancelledGenerationId == completionGuard.getCurrentGenerationId()
 
-        val countdownSec = if (dur > 0L && remainingMs in 1..COUNTDOWN_THRESHOLD_MS && autoNext && hasNext) {
+        val countdownSec = if (!isCountdownCancelled &&
+            dur > 0L &&
+            remainingMs in 1..COUNTDOWN_THRESHOLD_MS &&
+            autoNext &&
+            hasNext
+        ) {
             ((remainingMs + 999) / 1000).toInt()
         } else {
             null
@@ -593,6 +683,8 @@ class PlaybackController private constructor(
      */
     fun release() {
         stopProgressTicker()
+        cancelResolveTimeout()
+        cancelSwitchUnlock()
         statusScope.cancel()
         saveCurrentProgressToHistory()
         playerEngine.release()

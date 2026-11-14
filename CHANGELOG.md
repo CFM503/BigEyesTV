@@ -2,6 +2,24 @@
 
 本文档记录 `BigEyes-TV` 的所有版本迭代与变更历史。
 
+## [v1.3.6] - 2026-11-15 (跨端协议对齐、TV 遥控焦点/图标优化与引擎稳定性加固)
+
+### 🔗 跨端伴侣协议与控制同步
+* **无损分集地址更新与契约补齐**：`PlaybackIntentContract`、`PlaybackCommandReceiver` 与 `BigEyesCompanionHandler` 新增 `updateEpisodeUrl`、`playEpisode`、`setSpeed`、`togglePlayPause`、`autoPlayNext`、`retry`、`cancelCountdown`、`resumeFromHistory` 等接口与广播动作，并与手机端 `v2.2.3` 对齐 `BUFFERING`、`speed` 与 `errorMessage` 上报，空闲状态不再误报 `PAUSED`。
+
+### 🛠 播放引擎与后台服务加固
+* **ExoPlayer 与队列状态修复**：`ExoPlayerEngine` 增加 `@Volatile` 跨线程状态快照，修复 `attachPlayerView()` 误恢复用户暂停状态的问题，按 `.cause` 链识别 HTTP 4xx 快速失败并规范标注 `@OptIn(UnstableApi::class)`；`PlaybackController` 抑制空 URL 解析期间的误倒计时，并为切集解锁超时加入 token 保护；修复 `TvPlayerManager` 提示乱码。
+* **服务保活与协议兼容性**：`TvReceiverService` 补齐 `FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK`、`STOP_FOREGROUND_REMOVE` 与网络切换监听；`NetworkUtils` 过滤 VPN/CGNAT 网卡；修复 `AirPlayDiscoveryService` `MulticastLock` 泄漏及 `AirPlayHttpHandler` 倍速处理；`DlnaActionHandler` 修复 XML 转义与实体反转义；`AndroidManifest.xml` 修正 `application/x-mpegurl` 小写 MIME 匹配。
+
+### 📺 TV 大屏 UI、焦点与矢量图标完善
+* **TV 启动图标与待机页优化**：新增横向 `tv_banner.xml`（`320dp × 180dp`），增大待机与播控页 5% 过扫描安全边距；待机页新增「伴侣直连 / DLNA / AirPlay」真实状态徽标（保留圆角）与手动刷新服务按钮。
+* **矢量图标与遥控器交互**：新增 18 个矢量图标替换易缺失的 Emoji 文本，联动播放/暂停动态图标与隐藏按钮焦点回落；播控按钮栏支持 `HorizontalScrollView` 防裁切；`EpisodeListDialog` 重构为定高可滚动网格列表，支持总集数展示、空态提示、关闭按钮与错误/播完重播。
+
+### 🧪 工程与版本
+* 单测 105 项全部通过，`lintDebug` 0 错误；版本号升级：`versionCode 26 / versionName 1.3.6`。
+
+---
+
 ## [v1.3.4] - 2026-10-31 (全系统遥控器深度审计与交互加固：全键码兼容、看门狗保护、焦点死锁修复)
 
 ### 🎮 遥控器与交互全盘加固 (P0)

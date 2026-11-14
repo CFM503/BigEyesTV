@@ -30,6 +30,7 @@ interface PlayerEngine {
     fun pause()
     fun resume()
     fun stop()
+    fun resetForPendingUrl() {}
     fun seekTo(positionMs: Long)
     fun release()
     fun setPlaybackSpeed(speed: Float)

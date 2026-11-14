@@ -18,6 +18,7 @@ import com.bigeyes.tv.databinding.DialogEpisodeListBinding
 import com.bigeyes.tv.player.command.PlaybackCommand
 import com.bigeyes.tv.player.controller.PlaybackController
 import com.bigeyes.tv.player.model.Episode
+import com.bigeyes.tv.player.model.PlaybackState
 
 /**
  * Android TV Remote-friendly episode selection dialog with Grid layout and autofocus.
@@ -35,14 +36,15 @@ class EpisodeListDialog(
         binding = DialogEpisodeListBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        val dm = context.resources.displayMetrics
+        val dialogWidth = (dm.widthPixels * 0.86f).toInt().coerceAtLeast(480)
+        val dialogHeight = (dm.heightPixels * 0.78f).toInt().coerceAtLeast(320)
         window?.apply {
             setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-            setLayout(
-                WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.WRAP_CONTENT
-            )
+            setLayout(dialogWidth, dialogHeight)
         }
 
+        binding.btnCloseDialog.setOnClickListener { dismiss() }
         setupRecyclerView()
     }
 
@@ -55,26 +57,37 @@ class EpisodeListDialog(
         binding.tvDialogSeriesTitle.text = session.seriesTitle ?: session.currentEpisode?.seriesTitle ?: ""
         binding.tvDialogEpisodeCount.text = "共 ${episodes.size} 集"
 
-        val spanCount = if (episodes.size > 8) 6 else 4
+        if (episodes.isEmpty()) {
+            binding.tvEmptyEpisodes.visibility = View.VISIBLE
+            binding.recyclerEpisodes.visibility = View.GONE
+            binding.btnCloseDialog.requestFocus()
+            return
+        }
+
+        binding.tvEmptyEpisodes.visibility = View.GONE
+        binding.recyclerEpisodes.visibility = View.VISIBLE
+
+        val spanCount = if (episodes.size > 8) 5 else 4
         binding.recyclerEpisodes.layoutManager = GridLayoutManager(context, spanCount)
         val adapter = EpisodeAdapter(episodes, currentIndex) { position ->
-            if (position != currentIndex) {
-                controller.dispatch(PlaybackCommand.PlayEpisode(position))
+            val currentState = controller.session.value.playbackState
+            val shouldReplayCurrent = currentState == PlaybackState.ERROR || currentState == PlaybackState.COMPLETED
+            if (position != currentIndex || shouldReplayCurrent) {
+                controller.dispatch(PlaybackCommand.PlayEpisode(position, 0L))
             }
             dismiss()
         }
         binding.recyclerEpisodes.adapter = adapter
 
         // Auto-scroll to current episode and focus view safely
-        if (currentIndex in episodes.indices) {
-            binding.recyclerEpisodes.scrollToPosition(currentIndex)
-            binding.recyclerEpisodes.post {
-                val viewHolder = binding.recyclerEpisodes.findViewHolderForAdapterPosition(currentIndex)
-                if (viewHolder != null) {
-                    viewHolder.itemView.requestFocus()
-                } else {
-                    binding.recyclerEpisodes.getChildAt(0)?.requestFocus()
-                }
+        val targetIndex = currentIndex.coerceIn(0, episodes.lastIndex)
+        binding.recyclerEpisodes.scrollToPosition(targetIndex)
+        binding.recyclerEpisodes.post {
+            val viewHolder = binding.recyclerEpisodes.findViewHolderForAdapterPosition(targetIndex)
+            if (viewHolder != null) {
+                viewHolder.itemView.requestFocus()
+            } else {
+                binding.recyclerEpisodes.getChildAt(0)?.requestFocus() ?: binding.btnCloseDialog.requestFocus()
             }
         }
     }
@@ -95,10 +108,21 @@ class EpisodeListDialog(
             val ep = episodes[position]
             val isCurrent = position == currentIndex
 
-            holder.tvNumber.text = if (ep.episodeNumber > 0) "第 ${ep.episodeNumber} 集" else "第 ${position + 1} 集"
-            if (ep.episodeTitle.isNotBlank()) {
+            val labelNumber = if (ep.episodeNumber > 0) "第 ${ep.episodeNumber} 集" else "第 ${position + 1} 集"
+            holder.tvNumber.text = labelNumber
+            val epTitleTrimmed = ep.episodeTitle.trim()
+            val normalizedLabel = labelNumber.replace(" ", "")
+            val normalizedTitle = epTitleTrimmed.replace(" ", "")
+            if (isCurrent) {
                 holder.tvTitle.visibility = View.VISIBLE
-                holder.tvTitle.text = ep.episodeTitle
+                holder.tvTitle.text = if (epTitleTrimmed.isNotBlank() && normalizedTitle != normalizedLabel) {
+                    "正在播放 · $epTitleTrimmed"
+                } else {
+                    "正在播放"
+                }
+            } else if (epTitleTrimmed.isNotBlank() && normalizedTitle != normalizedLabel) {
+                holder.tvTitle.visibility = View.VISIBLE
+                holder.tvTitle.text = epTitleTrimmed
             } else {
                 holder.tvTitle.visibility = View.GONE
             }

@@ -390,4 +390,47 @@ class DlnaActionHandlerTest {
         assertEquals(200, resp.status.requestStatus)
         assertTrue(xml.contains("<CurrentURI>http://test.com/video.mp4</CurrentURI>"))
     }
+
+    @Test
+    fun testDeviceDescriptionEscapesXmlCharactersInFriendlyName() {
+        identity.deviceName = "Living <Room> & TV"
+        val resp = handler.handleRequest(get("/description.xml"))
+        val xml = body(resp)
+        assertEquals(200, resp.status.requestStatus)
+        assertTrue(xml.contains("<friendlyName>Living &lt;Room&gt; &amp; TV</friendlyName>"))
+    }
+
+    @Test
+    fun testGetTransportInfoReportsErrorOccurredOnPlayerError() {
+        player.play("http://test.com/video.mp4", 0L, "Sample")
+        player.currentState = com.bigeyes.tv.player.PlayerState.ERROR
+        val resp = handler.handleRequest(
+            soapSession(
+                "/upnp/control/avtransport",
+                "urn:schemas-upnp-org:service:AVTransport:1#GetTransportInfo",
+                soapBody("GetTransportInfo", "AVTransport")
+            )
+        )
+        val xml = body(resp)
+        assertEquals(200, resp.status.requestStatus)
+        assertTrue(xml.contains("<CurrentTransportState>STOPPED</CurrentTransportState>"))
+        assertTrue(xml.contains("<CurrentTransportStatus>ERROR_OCCURRED</CurrentTransportStatus>"))
+    }
+
+    @Test
+    fun testSetAVTransportURISingleUnescapesEntityEncodedAmpersands() {
+        handler.handleRequest(
+            soapSession(
+                "/upnp/control/avtransport",
+                "urn:schemas-upnp-org:service:AVTransport:1#SetAVTransportURI",
+                soapBody(
+                    "SetAVTransportURI",
+                    "AVTransport",
+                    "<CurrentURI>http://192.168.1.50/play.m3u8?a=1&amp;amp;b=2</CurrentURI>" +
+                        "<CurrentURIMetaData></CurrentURIMetaData>"
+                )
+            )
+        )
+        assertEquals("http://192.168.1.50/play.m3u8?a=1&amp;b=2", player.currentUrl)
+    }
 }

@@ -1,5 +1,7 @@
 package com.bigeyes.tv.config
 
+import androidx.annotation.OptIn
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 
 /**
@@ -72,10 +74,10 @@ object TvPlayerConfig {
         const val SLOW_MOTION_SPEED = 0.5f
 
         /** 快进 HUD 提示文字 */
-        const val HUD_FAST_FORWARD_TEXT = "⏩ 3.0X 快进中"
+        const val HUD_FAST_FORWARD_TEXT = "3.0X 快进中"
 
         /** 慢放 HUD 提示文字 */
-        const val HUD_SLOW_MOTION_TEXT = "⏪ 0.5X 慢放中"
+        const val HUD_SLOW_MOTION_TEXT = "0.5X 慢放中"
     }
 
     /**
@@ -110,6 +112,7 @@ object TvPlayerConfig {
     /**
      * 播放倍速与画面比例选项配置
      */
+    @OptIn(UnstableApi::class)
     object PlaybackOptions {
         /** 循环切换的倍速列表 */
         val SPEED_OPTIONS = floatArrayOf(1.0f, 1.25f, 1.5f, 2.0f, 0.75f)

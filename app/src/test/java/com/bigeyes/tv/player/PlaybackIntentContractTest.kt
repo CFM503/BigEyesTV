@@ -156,4 +156,22 @@ class PlaybackIntentContractTest {
         assertEquals(1, parsed.size)
         assertEquals("https://ref.example.com/", parsed[0].headers["Referer"])
     }
+
+    @Test
+    fun testNewContractActionsAndExtrasAreDefined() {
+        assertEquals("com.bigeyes.tv.action.PLAY_EPISODE", PlaybackIntentContract.ACTION_PLAY_EPISODE)
+        assertEquals("com.bigeyes.tv.action.UPDATE_EPISODE_URL", PlaybackIntentContract.ACTION_UPDATE_EPISODE_URL)
+        assertEquals("com.bigeyes.tv.action.TOGGLE_PLAY_PAUSE", PlaybackIntentContract.ACTION_TOGGLE_PLAY_PAUSE)
+        assertEquals("com.bigeyes.tv.action.SET_SPEED", PlaybackIntentContract.ACTION_SET_SPEED)
+        assertEquals("com.bigeyes.tv.action.SET_AUTO_PLAY_NEXT", PlaybackIntentContract.ACTION_SET_AUTO_PLAY_NEXT)
+        assertEquals("extra_speed", PlaybackIntentContract.EXTRA_SPEED)
+        assertEquals("extra_error_message", PlaybackIntentContract.EXTRA_ERROR_MESSAGE)
+        assertEquals("extra_headers", PlaybackIntentContract.EXTRA_HEADERS)
+        assertEquals("extra_resume_from_history", PlaybackIntentContract.EXTRA_RESUME_FROM_HISTORY)
+
+        val headersJson = """{"Referer":"https://r.test","User-Agent":"Agent/2"}"""
+        val parsedHeaders = PlaybackIntentContract.parseHeadersJson(headersJson)
+        assertEquals("https://r.test", parsedHeaders["Referer"])
+        assertEquals("Agent/2", parsedHeaders["User-Agent"])
+    }
 }

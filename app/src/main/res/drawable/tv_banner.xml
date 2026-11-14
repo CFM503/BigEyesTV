@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+    <!-- Deep navy background -->
+    <path
+        android:fillColor="#0D1829"
+        android:pathData="M0,0h320v180h-320z" />
+    <!-- Subtle diagonal accent stripe -->
+    <path
+        android:fillColor="#1565C0"
+        android:fillAlpha="0.35"
+        android:pathData="M180,0h140v180h-80z" />
+    <!-- Ambient circle behind emblem -->
+    <path
+        android:fillColor="#2196F3"
+        android:fillAlpha="0.18"
+        android:pathData="M160,90m-68,0a68,68 0,1 1,136 0a68,68 0,1 1,-136 0" />
+    <!-- TV Outer Bezel -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M96,42h128c4.4,0 8,3.6 8,8v68c0,4.4 -3.6,8 -8,8h-128c-4.4,0 -8,-3.6 -8,-8v-68c0,-4.4 3.6,-8 8,-8z" />
+    <!-- TV Screen -->
+    <path
+        android:fillColor="#1565C0"
+        android:pathData="M104,50h112v60h-112z" />
+    <!-- TV Stand -->
+    <path
+        android:fillColor="#E3F2FD"
+        android:pathData="M148,126h24v10h-24z M128,136h64v6h-64z" />
+    <!-- Play Triangle -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M148,65l32,15l-32,15z" />
+    <!-- Wireless Cast Arcs (bottom-left of screen) -->
+    <path
+        android:fillColor="#90CAF9"
+        android:pathData="M112,96a4,4 0,1 1,8 0a4,4 0,1 1,-8 0" />
+    <path
+        android:strokeColor="#90CAF9"
+        android:strokeWidth="3"
+        android:fillColor="#00000000"
+        android:pathData="M112,86c6,0 14,8 14,14" />
+    <path
+        android:strokeColor="#BBDEFB"
+        android:strokeWidth="3"
+        android:fillColor="#00000000"
+        android:pathData="M112,78c12,0 22,10 22,22" />
+</vector>

@@ -117,7 +117,10 @@
         android:background="#D9000000"
         android:gravity="center"
         android:orientation="vertical"
-        android:padding="32dp"
+        android:paddingStart="48dp"
+        android:paddingTop="28dp"
+        android:paddingEnd="48dp"
+        android:paddingBottom="28dp"
         android:visibility="gone">
 
         <TextView
@@ -149,9 +152,11 @@
                 android:layout_width="wrap_content"
                 android:layout_height="48dp"
                 android:background="@drawable/bg_tv_button"
+                android:drawableStart="@drawable/ic_replay"
+                android:drawablePadding="8dp"
                 android:focusable="true"
                 android:focusableInTouchMode="true"
-                android:paddingStart="24dp"
+                android:paddingStart="20dp"
                 android:paddingEnd="24dp"
                 android:text="重新播放"
                 android:textColor="@color/white"
@@ -163,9 +168,11 @@
                 android:layout_height="48dp"
                 android:layout_marginStart="16dp"
                 android:background="@drawable/bg_tv_button"
+                android:drawableStart="@drawable/ic_skip_next"
+                android:drawablePadding="8dp"
                 android:focusable="true"
                 android:focusableInTouchMode="true"
-                android:paddingStart="24dp"
+                android:paddingStart="20dp"
                 android:paddingEnd="24dp"
                 android:text="下一集"
                 android:textColor="@color/white"
@@ -178,9 +185,11 @@
                 android:layout_height="48dp"
                 android:layout_marginStart="16dp"
                 android:background="@drawable/bg_tv_button"
+                android:drawableStart="@drawable/ic_playlist"
+                android:drawablePadding="8dp"
                 android:focusable="true"
                 android:focusableInTouchMode="true"
-                android:paddingStart="24dp"
+                android:paddingStart="20dp"
                 android:paddingEnd="24dp"
                 android:text="选集"
                 android:textColor="@color/white"
@@ -192,9 +201,11 @@
                 android:layout_height="48dp"
                 android:layout_marginStart="16dp"
                 android:background="@drawable/bg_tv_button"
+                android:drawableStart="@drawable/ic_exit"
+                android:drawablePadding="8dp"
                 android:focusable="true"
                 android:focusableInTouchMode="true"
-                android:paddingStart="24dp"
+                android:paddingStart="20dp"
                 android:paddingEnd="24dp"
                 android:text="返回主页"
                 android:textColor="#FF5252"
@@ -210,7 +221,10 @@
         android:background="#D9000000"
         android:gravity="center"
         android:orientation="vertical"
-        android:padding="32dp"
+        android:paddingStart="48dp"
+        android:paddingTop="28dp"
+        android:paddingEnd="48dp"
+        android:paddingBottom="28dp"
         android:visibility="gone">
 
         <TextView
@@ -227,6 +241,8 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
+            android:gravity="center"
+            android:maxWidth="720dp"
             android:text="视频地址加载失败，请重试"
             android:textColor="@color/text_secondary"
             android:textSize="16sp" />
@@ -242,9 +258,11 @@
                 android:layout_width="wrap_content"
                 android:layout_height="48dp"
                 android:background="@drawable/bg_tv_button"
+                android:drawableStart="@drawable/ic_refresh"
+                android:drawablePadding="8dp"
                 android:focusable="true"
                 android:focusableInTouchMode="true"
-                android:paddingStart="24dp"
+                android:paddingStart="20dp"
                 android:paddingEnd="24dp"
                 android:text="重试"
                 android:textColor="@color/white"
@@ -256,9 +274,11 @@
                 android:layout_height="48dp"
                 android:layout_marginStart="16dp"
                 android:background="@drawable/bg_tv_button"
+                android:drawableStart="@drawable/ic_skip_previous"
+                android:drawablePadding="8dp"
                 android:focusable="true"
                 android:focusableInTouchMode="true"
-                android:paddingStart="24dp"
+                android:paddingStart="20dp"
                 android:paddingEnd="24dp"
                 android:text="上一集"
                 android:textColor="@color/white"
@@ -270,9 +290,11 @@
                 android:layout_height="48dp"
                 android:layout_marginStart="16dp"
                 android:background="@drawable/bg_tv_button"
+                android:drawableStart="@drawable/ic_skip_next"
+                android:drawablePadding="8dp"
                 android:focusable="true"
                 android:focusableInTouchMode="true"
-                android:paddingStart="24dp"
+                android:paddingStart="20dp"
                 android:paddingEnd="24dp"
                 android:text="下一集"
                 android:textColor="@color/white"
@@ -284,9 +306,11 @@
                 android:layout_height="48dp"
                 android:layout_marginStart="16dp"
                 android:background="@drawable/bg_tv_button"
+                android:drawableStart="@drawable/ic_exit"
+                android:drawablePadding="8dp"
                 android:focusable="true"
                 android:focusableInTouchMode="true"
-                android:paddingStart="24dp"
+                android:paddingStart="20dp"
                 android:paddingEnd="24dp"
                 android:text="返回主页"
                 android:textColor="#FF5252"
@@ -300,9 +324,9 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:background="@drawable/bg_control_overlay"
-        android:paddingStart="40dp"
+        android:paddingStart="48dp"
         android:paddingTop="28dp"
-        android:paddingEnd="40dp"
+        android:paddingEnd="48dp"
         android:paddingBottom="28dp"
         android:visibility="gone">
 
@@ -437,127 +461,152 @@
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
 
-                <Button
-                    android:id="@+id/btnOverlayPlayPause"
-                    android:layout_width="wrap_content"
-                    android:layout_height="48dp"
-                    android:background="@drawable/bg_tv_button"
-                    android:focusable="true"
-                    android:focusableInTouchMode="true"
-                    android:nextFocusUp="@+id/overlaySeekBar"
-                    android:paddingStart="16dp"
-                    android:paddingEnd="16dp"
-                    android:text="暂停"
-                    android:textColor="@color/white"
-                    android:textSize="14sp" />
-
-                <Button
-                    android:id="@+id/btnOverlayPrevEpisode"
-                    android:layout_width="wrap_content"
-                    android:layout_height="48dp"
-                    android:layout_marginStart="10dp"
-                    android:background="@drawable/bg_tv_button"
-                    android:focusable="true"
-                    android:focusableInTouchMode="true"
-                    android:nextFocusUp="@+id/overlaySeekBar"
-                    android:paddingStart="14dp"
-                    android:paddingEnd="14dp"
-                    android:text="上一集"
-                    android:textColor="@color/white"
-                    android:textSize="14sp" />
-
-                <Button
-                    android:id="@+id/btnOverlayNextEpisode"
-                    android:layout_width="wrap_content"
-                    android:layout_height="48dp"
-                    android:layout_marginStart="10dp"
-                    android:background="@drawable/bg_tv_button"
-                    android:focusable="true"
-                    android:focusableInTouchMode="true"
-                    android:nextFocusUp="@+id/overlaySeekBar"
-                    android:paddingStart="14dp"
-                    android:paddingEnd="14dp"
-                    android:text="下一集"
-                    android:textColor="@color/white"
-                    android:textSize="14sp" />
-
-                <Button
-                    android:id="@+id/btnOverlayEpisodeList"
-                    android:layout_width="wrap_content"
-                    android:layout_height="48dp"
-                    android:layout_marginStart="10dp"
-                    android:background="@drawable/bg_tv_button"
-                    android:focusable="true"
-                    android:focusableInTouchMode="true"
-                    android:nextFocusUp="@+id/overlaySeekBar"
-                    android:paddingStart="14dp"
-                    android:paddingEnd="14dp"
-                    android:text="选集"
-                    android:textColor="@color/white"
-                    android:textSize="14sp" />
-
-                <Button
-                    android:id="@+id/btnOverlayAutoPlay"
-                    android:layout_width="wrap_content"
-                    android:layout_height="48dp"
-                    android:layout_marginStart="10dp"
-                    android:background="@drawable/bg_tv_button"
-                    android:focusable="true"
-                    android:focusableInTouchMode="true"
-                    android:nextFocusUp="@+id/overlaySeekBar"
-                    android:paddingStart="14dp"
-                    android:paddingEnd="14dp"
-                    android:text="连播: 开"
-                    android:textColor="#FFD700"
-                    android:textSize="14sp" />
-
-                <Button
-                    android:id="@+id/btnOverlaySpeed"
-                    android:layout_width="wrap_content"
-                    android:layout_height="48dp"
-                    android:layout_marginStart="10dp"
-                    android:background="@drawable/bg_tv_button"
-                    android:focusable="true"
-                    android:focusableInTouchMode="true"
-                    android:nextFocusUp="@+id/overlaySeekBar"
-                    android:paddingStart="14dp"
-                    android:paddingEnd="14dp"
-                    android:text="倍速 1.0x"
-                    android:textColor="@color/white"
-                    android:textSize="14sp" />
-
-                <Button
-                    android:id="@+id/btnOverlayAspectRatio"
-                    android:layout_width="wrap_content"
-                    android:layout_height="48dp"
-                    android:layout_marginStart="10dp"
-                    android:background="@drawable/bg_tv_button"
-                    android:focusable="true"
-                    android:focusableInTouchMode="true"
-                    android:nextFocusUp="@+id/overlaySeekBar"
-                    android:nextFocusRight="@+id/btnOverlayExit"
-                    android:paddingStart="14dp"
-                    android:paddingEnd="14dp"
-                    android:text="适应"
-                    android:textColor="@color/white"
-                    android:textSize="14sp" />
-
-                <View
+                <HorizontalScrollView
                     android:layout_width="0dp"
-                    android:layout_height="1dp"
-                    android:layout_weight="1" />
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:fadeScrollbars="true"
+                    android:scrollbars="none">
+
+                    <LinearLayout
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <Button
+                            android:id="@+id/btnOverlayPlayPause"
+                            android:layout_width="wrap_content"
+                            android:layout_height="46dp"
+                            android:background="@drawable/bg_tv_button"
+                            android:drawableStart="@drawable/ic_pause"
+                            android:drawablePadding="6dp"
+                            android:focusable="true"
+                            android:focusableInTouchMode="true"
+                            android:nextFocusUp="@+id/overlaySeekBar"
+                            android:paddingStart="14dp"
+                            android:paddingEnd="14dp"
+                            android:text="暂停"
+                            android:textColor="@color/white"
+                            android:textSize="14sp" />
+
+                        <Button
+                            android:id="@+id/btnOverlayPrevEpisode"
+                            android:layout_width="wrap_content"
+                            android:layout_height="46dp"
+                            android:layout_marginStart="8dp"
+                            android:background="@drawable/bg_tv_button"
+                            android:drawableStart="@drawable/ic_skip_previous"
+                            android:drawablePadding="6dp"
+                            android:focusable="true"
+                            android:focusableInTouchMode="true"
+                            android:nextFocusUp="@+id/overlaySeekBar"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="14dp"
+                            android:text="上一集"
+                            android:textColor="@color/white"
+                            android:textSize="14sp" />
+
+                        <Button
+                            android:id="@+id/btnOverlayNextEpisode"
+                            android:layout_width="wrap_content"
+                            android:layout_height="46dp"
+                            android:layout_marginStart="8dp"
+                            android:background="@drawable/bg_tv_button"
+                            android:drawableStart="@drawable/ic_skip_next"
+                            android:drawablePadding="6dp"
+                            android:focusable="true"
+                            android:focusableInTouchMode="true"
+                            android:nextFocusUp="@+id/overlaySeekBar"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="14dp"
+                            android:text="下一集"
+                            android:textColor="@color/white"
+                            android:textSize="14sp" />
+
+                        <Button
+                            android:id="@+id/btnOverlayEpisodeList"
+                            android:layout_width="wrap_content"
+                            android:layout_height="46dp"
+                            android:layout_marginStart="8dp"
+                            android:background="@drawable/bg_tv_button"
+                            android:drawableStart="@drawable/ic_playlist"
+                            android:drawablePadding="6dp"
+                            android:focusable="true"
+                            android:focusableInTouchMode="true"
+                            android:nextFocusUp="@+id/overlaySeekBar"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="14dp"
+                            android:text="选集"
+                            android:textColor="@color/white"
+                            android:textSize="14sp" />
+
+                        <Button
+                            android:id="@+id/btnOverlayAutoPlay"
+                            android:layout_width="wrap_content"
+                            android:layout_height="46dp"
+                            android:layout_marginStart="8dp"
+                            android:background="@drawable/bg_tv_button"
+                            android:drawableStart="@drawable/ic_autoplay"
+                            android:drawablePadding="6dp"
+                            android:focusable="true"
+                            android:focusableInTouchMode="true"
+                            android:nextFocusUp="@+id/overlaySeekBar"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="14dp"
+                            android:text="连播: 开"
+                            android:textColor="#FFD700"
+                            android:textSize="14sp" />
+
+                        <Button
+                            android:id="@+id/btnOverlaySpeed"
+                            android:layout_width="wrap_content"
+                            android:layout_height="46dp"
+                            android:layout_marginStart="8dp"
+                            android:background="@drawable/bg_tv_button"
+                            android:drawableStart="@drawable/ic_speed"
+                            android:drawablePadding="6dp"
+                            android:focusable="true"
+                            android:focusableInTouchMode="true"
+                            android:nextFocusUp="@+id/overlaySeekBar"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="14dp"
+                            android:text="倍速 1.0x"
+                            android:textColor="@color/white"
+                            android:textSize="14sp" />
+
+                        <Button
+                            android:id="@+id/btnOverlayAspectRatio"
+                            android:layout_width="wrap_content"
+                            android:layout_height="46dp"
+                            android:layout_marginStart="8dp"
+                            android:background="@drawable/bg_tv_button"
+                            android:drawableStart="@drawable/ic_aspect_ratio"
+                            android:drawablePadding="6dp"
+                            android:focusable="true"
+                            android:focusableInTouchMode="true"
+                            android:nextFocusUp="@+id/overlaySeekBar"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="14dp"
+                            android:text="比例: 适应"
+                            android:textColor="@color/white"
+                            android:textSize="14sp" />
+                    </LinearLayout>
+                </HorizontalScrollView>
 
                 <Button
                     android:id="@+id/btnOverlayExit"
                     android:layout_width="wrap_content"
-                    android:layout_height="48dp"
+                    android:layout_height="46dp"
+                    android:layout_marginStart="12dp"
                     android:background="@drawable/bg_tv_button"
+                    android:drawableStart="@drawable/ic_exit"
+                    android:drawablePadding="6dp"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
                     android:nextFocusUp="@+id/overlaySeekBar"
-                    android:nextFocusLeft="@+id/btnOverlayAspectRatio"
-                    android:paddingStart="18dp"
-                    android:paddingEnd="18dp"
+                    android:paddingStart="14dp"
+                    android:paddingEnd="16dp"
                     android:text="退出"
                     android:textColor="#FF5252"
                     android:textSize="14sp" />
@@ -579,17 +628,26 @@
         android:elevation="16dp"
         android:gravity="center"
         android:orientation="horizontal"
-        android:paddingStart="28dp"
+        android:paddingStart="24dp"
         android:paddingTop="12dp"
         android:paddingEnd="28dp"
         android:paddingBottom="12dp"
         android:visibility="gone">
 
+        <ImageView
+            android:id="@+id/ivSpeedHudIcon"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:layout_marginEnd="10dp"
+            android:contentDescription="@null"
+            android:src="@drawable/ic_fast_forward"
+            app:tint="#FFD700" />
+
         <TextView
             android:id="@+id/tvSpeedHudText"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="⏩ 3.0X 快进中"
+            android:text="3.0X 快进中"
             android:textColor="#FFD700"
             android:textSize="22sp"
             android:textStyle="bold" />
@@ -602,16 +660,34 @@
         android:layout_height="match_parent"
         android:gravity="center"
         android:orientation="vertical"
-        android:padding="32dp">
+        android:paddingStart="48dp"
+        android:paddingTop="28dp"
+        android:paddingEnd="48dp"
+        android:paddingBottom="28dp">
 
-        <TextView
-            android:id="@+id/tvTitle"
+        <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="@string/standby_title"
-            android:textColor="@color/text_primary"
-            android:textSize="36sp"
-            android:textStyle="bold" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <ImageView
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_marginEnd="14dp"
+                android:contentDescription="@null"
+                android:src="@drawable/ic_tv_cast"
+                app:tint="@color/accent_blue" />
+
+            <TextView
+                android:id="@+id/tvTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/standby_title"
+                android:textColor="@color/text_primary"
+                android:textSize="34sp"
+                android:textStyle="bold" />
+        </LinearLayout>
 
         <TextView
             android:id="@+id/tvSubtitle"
@@ -626,17 +702,32 @@
         <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
+            android:layout_marginTop="20dp"
+            android:gravity="center"
             android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/badgeCompanion"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_status_badge"
+                android:paddingStart="14dp"
+                android:paddingTop="6dp"
+                android:paddingEnd="14dp"
+                android:paddingBottom="6dp"
+                android:text="伴侣直连: 在线"
+                android:textColor="@color/white"
+                android:textSize="14sp" />
 
             <TextView
                 android:id="@+id/badgeDlna"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:background="#2E7D32"
-                android:paddingStart="12dp"
+                android:layout_marginStart="14dp"
+                android:background="@drawable/bg_status_badge"
+                android:paddingStart="14dp"
                 android:paddingTop="6dp"
-                android:paddingEnd="12dp"
+                android:paddingEnd="14dp"
                 android:paddingBottom="6dp"
                 android:text="DLNA: 在线"
                 android:textColor="@color/white"
@@ -646,11 +737,11 @@
                 android:id="@+id/badgeAirPlay"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="16dp"
-                android:background="#1565C0"
-                android:paddingStart="12dp"
+                android:layout_marginStart="14dp"
+                android:background="@drawable/bg_status_badge"
+                android:paddingStart="14dp"
                 android:paddingTop="6dp"
-                android:paddingEnd="12dp"
+                android:paddingEnd="14dp"
                 android:paddingBottom="6dp"
                 android:text="AirPlay: 在线"
                 android:textColor="@color/white"
@@ -662,10 +753,10 @@
         <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="32dp"
-            android:background="@color/card_bg"
+            android:layout_marginTop="24dp"
+            android:background="@drawable/bg_dialog_panel"
             android:orientation="vertical"
-            android:padding="20dp">
+            android:padding="22dp">
 
             <TextView
                 android:id="@+id/tvDeviceName"
@@ -698,23 +789,49 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:text="当前版本：v1.0.1"
+                android:text="当前版本：--"
                 android:textColor="@color/text_secondary"
                 android:textSize="14sp" />
 
-            <Button
-                android:id="@+id/btnCheckUpdate"
+            <LinearLayout
                 android:layout_width="wrap_content"
-                android:layout_height="44dp"
-                android:layout_marginTop="14dp"
-                android:background="@drawable/bg_tv_button"
-                android:focusable="true"
-                android:focusableInTouchMode="true"
-                android:paddingStart="20dp"
-                android:paddingEnd="20dp"
-                android:text="🔄 检查更新"
-                android:textColor="@color/white"
-                android:textSize="14sp" />
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btnRefreshService"
+                    android:layout_width="wrap_content"
+                    android:layout_height="44dp"
+                    android:background="@drawable/bg_tv_button"
+                    android:drawableStart="@drawable/ic_refresh"
+                    android:drawablePadding="8dp"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusRight="@+id/btnCheckUpdate"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="18dp"
+                    android:text="刷新服务"
+                    android:textColor="@color/white"
+                    android:textSize="14sp" />
+
+                <Button
+                    android:id="@+id/btnCheckUpdate"
+                    android:layout_width="wrap_content"
+                    android:layout_height="44dp"
+                    android:layout_marginStart="14dp"
+                    android:background="@drawable/bg_tv_button"
+                    android:drawableStart="@drawable/ic_replay"
+                    android:drawablePadding="8dp"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusLeft="@+id/btnRefreshService"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="18dp"
+                    android:text="检查更新"
+                    android:textColor="@color/white"
+                    android:textSize="14sp" />
+            </LinearLayout>
 
         </LinearLayout>
 
@@ -722,9 +839,10 @@
             android:id="@+id/tvInstructions"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
+            android:layout_marginTop="20dp"
             android:gravity="center"
             android:lineSpacingExtra="4dp"
+            android:maxWidth="760dp"
             android:text="@string/standby_instructions"
             android:textColor="@color/text_secondary"
             android:textSize="14sp" />

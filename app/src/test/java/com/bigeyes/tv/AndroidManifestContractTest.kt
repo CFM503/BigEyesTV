@@ -64,11 +64,17 @@ class AndroidManifestContractTest {
             PlaybackIntentContract.ACTION_PAUSE,
             PlaybackIntentContract.ACTION_RESUME,
             PlaybackIntentContract.ACTION_STOP,
-            PlaybackIntentContract.ACTION_SEEK
+            PlaybackIntentContract.ACTION_SEEK,
+            PlaybackIntentContract.ACTION_PLAY_EPISODE,
+            PlaybackIntentContract.ACTION_UPDATE_EPISODE_URL,
+            PlaybackIntentContract.ACTION_TOGGLE_PLAY_PAUSE,
+            PlaybackIntentContract.ACTION_SET_SPEED,
+            PlaybackIntentContract.ACTION_SET_AUTO_PLAY_NEXT
         )
         expected.forEach { action ->
             assertTrue("Manifest is missing intent action $action", action in actions)
         }
+        assertEquals("@drawable/tv_banner", attribute(activity, "banner"))
     }
 
     @Test
@@ -77,6 +83,17 @@ class AndroidManifestContractTest {
         assertEquals(ReceiverClass, componentName(receiver))
         assertEquals("true", attribute(receiver, "exported"))
         assertEquals(PERMISSION, attribute(receiver, "permission"))
+        val receiverActions = receiver.getElementsByTagName("action").asList()
+            .mapNotNull { attribute(it, "name") }
+        listOf(
+            PlaybackIntentContract.ACTION_PLAY_EPISODE,
+            PlaybackIntentContract.ACTION_UPDATE_EPISODE_URL,
+            PlaybackIntentContract.ACTION_TOGGLE_PLAY_PAUSE,
+            PlaybackIntentContract.ACTION_SET_SPEED,
+            PlaybackIntentContract.ACTION_SET_AUTO_PLAY_NEXT
+        ).forEach { action ->
+            assertTrue("Receiver is missing intent action $action", action in receiverActions)
+        }
     }
 
     @Test

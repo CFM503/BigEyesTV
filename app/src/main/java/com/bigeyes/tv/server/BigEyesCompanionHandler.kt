@@ -77,14 +77,14 @@ class BigEyesCompanionHandler(
 
     private fun handleGetStatus(): Response {
         val ep = playerManager.getCurrentEpisode()
+        val hasActiveMedia = !playerManager.currentUrl.isNullOrBlank() || ep != null
 
         val stateStr = when {
+            playerManager.currentState == PlayerState.ERROR -> "ERROR"
             playerManager.isPlaying() -> "PLAYING"
             playerManager.isEnded() -> "COMPLETED"
-            playerManager.isBuffering -> "BUFFERING"
-            playerManager.currentState == PlayerState.ERROR -> "ERROR"
-            playerManager.currentState == PlayerState.READY -> "PAUSED"
-            playerManager.currentState == PlayerState.BUFFERING -> "BUFFERING"
+            playerManager.isBuffering || playerManager.currentState == PlayerState.BUFFERING -> "BUFFERING"
+            hasActiveMedia && playerManager.currentState == PlayerState.READY -> "PAUSED"
             else -> "STOPPED"
         }
 
@@ -130,18 +130,11 @@ class BigEyesCompanionHandler(
             val episodeTitle = json.optString("episodeTitle", "")
             val positionMs = if (json.has("startPositionMs")) json.optLong("startPositionMs", 0L) else json.optLong("positionMs", 0L)
             val autoPlayNext = json.optBoolean("autoPlayNext", true)
+            val resumeFromHistory = json.optBoolean("resumeFromHistory", true)
             val playUrl = json.optString("playUrl").ifBlank { json.optString("url", "") }
 
             // Anti-hotlink request headers
-            val headersMap = mutableMapOf<String, String>()
-            json.optJSONObject("headers")?.let { hObj ->
-                val keys = hObj.keys()
-                while (keys.hasNext()) {
-                    val k = keys.next()
-                    val v = hObj.optString(k)
-                    if (v.isNotBlank()) headersMap[k] = v
-                }
-            }
+            val headersMap = parseHeadersJson(json.optJSONObject("headers"))
 
             // Episode queue (Queue Handover)
             val queueList = mutableListOf<Episode>()
@@ -194,7 +187,8 @@ class BigEyesCompanionHandler(
                 queue = queueList,
                 startIndex = episodeIndex,
                 startPositionMs = positionMs,
-                autoPlayNext = autoPlayNext
+                autoPlayNext = autoPlayNext,
+                resumeFromHistory = resumeFromHistory
             )
 
             Log.i(TAG, "Successfully started playback for: $seriesTitle - $episodeTitle (Queue: ${queueList.size})")
@@ -218,6 +212,7 @@ class BigEyesCompanionHandler(
             when (action) {
                 "PAUSE" -> playerManager.pause()
                 "RESUME" -> playerManager.resume()
+                "TOGGLE", "TOGGLE_PLAY_PAUSE", "TOGGLEPLAYPAUSE" -> playerManager.togglePlayPause()
                 "STOP" -> playerManager.stop()
                 "NEXT" -> playerManager.playNext()
                 "PREV", "PREVIOUS" -> playerManager.playPrevious()
@@ -229,10 +224,45 @@ class BigEyesCompanionHandler(
                     val speed = json.optDouble("speed", 1.0).toFloat()
                     playerManager.setPlaybackSpeed(speed)
                 }
+                "AUTO_PLAY_NEXT", "SET_AUTO_PLAY_NEXT", "AUTOPLAYNEXT", "AUTOPLAY" -> {
+                    val enabled = if (json.has("enabled")) {
+                        json.optBoolean("enabled", true)
+                    } else {
+                        json.optBoolean("autoPlayNext", true)
+                    }
+                    playerManager.setAutoPlayNext(enabled)
+                }
+                "RETRY" -> playerManager.retry()
+                "CANCEL_COUNTDOWN", "CANCELCOUNTDOWN" -> playerManager.cancelCountdown()
+                "VOLUME", "SET_VOLUME" -> {
+                    val rawVol = json.optDouble("volume", 1.0)
+                    val normalized = if (rawVol > 1.0) (rawVol / 100.0) else rawVol
+                    playerManager.setPlaybackVolume(normalized.coerceIn(0.0, 1.0))
+                }
                 "PLAY_EPISODE", "PLAYEPISODE" -> {
                     val idx = if (json.has("episodeIndex")) json.optInt("episodeIndex") else json.optInt("index", 0)
                     val pos = json.optLong("positionMs", 0L)
                     playerManager.playEpisode(idx, pos)
+                }
+                "UPDATE_EPISODE_URL", "UPDATEEPISODEURL" -> {
+                    val idx = when {
+                        json.has("episodeIndex") -> json.optInt("episodeIndex")
+                        json.has("index") -> json.optInt("index")
+                        else -> -1
+                    }
+                    val playUrl = json.optString("playUrl").ifBlank { json.optString("url", "") }
+                    if (idx < 0 || playUrl.isBlank()) {
+                        return jsonResponse(Response.Status.BAD_REQUEST, 400, "Missing valid episodeIndex or playUrl")
+                    }
+                    val headers = if (json.has("headers")) parseHeadersJson(json.optJSONObject("headers")) else null
+                    val pos: Long? = when {
+                        json.has("positionMs") -> json.optLong("positionMs", 0L)
+                        json.has("startPositionMs") -> json.optLong("startPositionMs", 0L)
+                        else -> null
+                    }
+                    if (!playerManager.updateEpisodeUrl(idx, playUrl, headers, pos)) {
+                        return jsonResponse(Response.Status.NOT_FOUND, 404, "Episode index out of range: $idx")
+                    }
                 }
                 else -> return jsonResponse(Response.Status.BAD_REQUEST, 400, "Unknown action: $action")
             }
@@ -245,10 +275,23 @@ class BigEyesCompanionHandler(
         }
     }
 
+    private fun parseHeadersJson(hObj: JSONObject?): MutableMap<String, String> {
+        val headersMap = mutableMapOf<String, String>()
+        if (hObj != null) {
+            val keys = hObj.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
+                val v = hObj.optString(k)
+                if (v.isNotBlank()) headersMap[k] = v
+            }
+        }
+        return headersMap
+    }
+
     private fun readBodyString(session: IHTTPSession): String {
         val lenStr = session.headers["content-length"]
         val len = lenStr?.toIntOrNull() ?: 0
-        if (len > 0) {
+        if (len in 1..4_194_304) {
             try {
                 val buffer = ByteArray(len)
                 var totalRead = 0

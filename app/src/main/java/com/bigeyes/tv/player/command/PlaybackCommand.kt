@@ -28,7 +28,14 @@ sealed class PlaybackCommand {
         val queue: List<Episode>,
         val startIndex: Int = 0,
         val startPositionMs: Long = 0L,
-        val autoPlayNext: Boolean = true
+        val autoPlayNext: Boolean = true,
+        val resumeFromHistory: Boolean = true
+    ) : PlaybackCommand()
+    data class UpdateEpisodeUrl(
+        val episodeIndex: Int,
+        val playUrl: String,
+        val headers: Map<String, String>? = null,
+        val positionMs: Long? = null
     ) : PlaybackCommand()
     object CancelCountdown : PlaybackCommand()
     data class SetAutoPlayNext(val enabled: Boolean) : PlaybackCommand()

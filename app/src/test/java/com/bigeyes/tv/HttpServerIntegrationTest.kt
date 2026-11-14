@@ -355,6 +355,70 @@ class HttpServerIntegrationTest {
     }
 
     @Test
+    fun testCompanionStatusReportsStoppedWhenNoMediaActive() {
+        player.stop()
+        player.currentState = com.bigeyes.tv.player.PlayerState.READY
+        val body = open("/bigeyes/api/status", "GET").body()
+        assertTrue("Ready player with null URL must not report PAUSED: $body", body.contains("\"state\":\"STOPPED\""))
+
+        player.play("http://127.0.0.1/live.m3u8", 0L, "Live")
+        player.currentState = com.bigeyes.tv.player.PlayerState.ERROR
+        val errBody = open("/bigeyes/api/status", "GET").body()
+        assertTrue("Error state must report ERROR: $errBody", errBody.contains("\"state\":\"ERROR\""))
+    }
+
+    @Test
+    fun testCompanionPlayResumeFlagAndControlExtensions() {
+        val playPayload = """
+            {
+              "queue": [
+                {"seriesId": "s1", "seriesTitle": "测试", "episodeNumber": 1, "episodeIndex": 0, "playUrl": "http://cdn.com/1.m3u8"}
+              ],
+              "startIndex": 0,
+              "startPositionMs": 12000,
+              "autoPlayNext": false,
+              "resumeFromHistory": false
+            }
+        """.trimIndent().toByteArray(Charsets.UTF_8)
+        val playConn = post("/bigeyes/api/play", playPayload, "application/json")
+        assertEquals(200, playConn.responseCode)
+        assertEquals(false, player.lastResumeFromHistory)
+        assertEquals(false, player.autoPlayNextEnabled)
+
+        val actions = listOf(
+            """{"action":"UPDATE_EPISODE_URL","episodeIndex":0,"playUrl":"http://cdn.com/fresh.m3u8","headers":{"Referer":"https://ref.test/"}}""",
+            """{"action":"TOGGLE_PLAY_PAUSE"}""",
+            """{"action":"SET_AUTO_PLAY_NEXT","enabled":true}""",
+            """{"action":"RETRY"}""",
+            """{"action":"CANCEL_COUNTDOWN"}""",
+            """{"action":"VOLUME","volume":0.65}"""
+        )
+        for (payload in actions) {
+            val resp = post("/bigeyes/api/control", payload.toByteArray(Charsets.UTF_8), "application/json")
+            assertEquals("Control failed for $payload", 200, resp.responseCode)
+        }
+        assertTrue(player.calls.any { it.startsWith("updateEpisodeUrl:0:http://cdn.com/fresh.m3u8") })
+        assertEquals("https://ref.test/", player.lastUpdatedHeaders["Referer"])
+        assertTrue("togglePlayPause" in player.calls)
+        assertTrue("setAutoPlayNext:true" in player.calls)
+        assertTrue("retry" in player.calls)
+        assertTrue("cancelCountdown" in player.calls)
+        assertEquals(0.65, player.volumeLevel, 0.01)
+    }
+
+    @Test
+    fun testAirPlayRateAppliesPlaybackSpeed() {
+        val fastConn = post("/rate?value=1.5", ByteArray(0), "text/plain")
+        assertEquals(200, fastConn.responseCode)
+        assertEquals(1.5f, player.speed, 0.01f)
+        assertTrue("speed:1.5" in player.calls)
+
+        val pauseConn = post("/rate?value=0.0", ByteArray(0), "text/plain")
+        assertEquals(200, pauseConn.responseCode)
+        assertTrue("pause" in player.calls)
+    }
+
+    @Test
     fun testUnknownRouteIs404() {
         assertEquals(404, open("/definitely-not-a-route", "GET").responseCode)
     }

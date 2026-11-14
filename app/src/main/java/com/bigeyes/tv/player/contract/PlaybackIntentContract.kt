@@ -19,12 +19,17 @@ object PlaybackIntentContract {
     // Standard Actions
     const val ACTION_PLAY = "com.bigeyes.tv.action.PLAY"
     const val ACTION_PLAY_QUEUE = "com.bigeyes.tv.action.PLAY_QUEUE"
+    const val ACTION_PLAY_EPISODE = "com.bigeyes.tv.action.PLAY_EPISODE"
+    const val ACTION_UPDATE_EPISODE_URL = "com.bigeyes.tv.action.UPDATE_EPISODE_URL"
     const val ACTION_NEXT = "com.bigeyes.tv.action.NEXT"
     const val ACTION_PREVIOUS = "com.bigeyes.tv.action.PREVIOUS"
     const val ACTION_PAUSE = "com.bigeyes.tv.action.PAUSE"
     const val ACTION_RESUME = "com.bigeyes.tv.action.RESUME"
+    const val ACTION_TOGGLE_PLAY_PAUSE = "com.bigeyes.tv.action.TOGGLE_PLAY_PAUSE"
     const val ACTION_STOP = "com.bigeyes.tv.action.STOP"
     const val ACTION_SEEK = "com.bigeyes.tv.action.SEEK"
+    const val ACTION_SET_SPEED = "com.bigeyes.tv.action.SET_SPEED"
+    const val ACTION_SET_AUTO_PLAY_NEXT = "com.bigeyes.tv.action.SET_AUTO_PLAY_NEXT"
 
     // Status broadcast sent from BigEyesTV back to the BigEyes phone app
     const val ACTION_STATUS_UPDATE = "com.bigeyes.tv.action.STATUS_UPDATE"
@@ -43,7 +48,11 @@ object PlaybackIntentContract {
     const val EXTRA_POSITION_MS = "extra_position_ms"
     const val EXTRA_DURATION_MS = "extra_duration_ms"
     const val EXTRA_AUTO_PLAY_NEXT = "extra_auto_play_next"
+    const val EXTRA_RESUME_FROM_HISTORY = "extra_resume_from_history"
     const val EXTRA_STATE = "extra_state"
+    const val EXTRA_SPEED = "extra_speed"
+    const val EXTRA_ERROR_MESSAGE = "extra_error_message"
+    const val EXTRA_HEADERS = "extra_headers"
     const val EXTRA_HEADER_REFERER = "extra_header_referer"
     const val EXTRA_HEADER_USER_AGENT = "extra_header_user_agent"
     const val EXTRA_HEADER_COOKIE = "extra_header_cookie"
@@ -51,6 +60,7 @@ object PlaybackIntentContract {
     // Playback states mirrored by the companion BigEyes phone app
     const val STATE_PLAYING = "PLAYING"
     const val STATE_PAUSED = "PAUSED"
+    const val STATE_BUFFERING = "BUFFERING"
     const val STATE_COMPLETED = "COMPLETED"
     const val STATE_STOPPED = "STOPPED"
     const val STATE_ERROR = "ERROR"
@@ -79,11 +89,37 @@ object PlaybackIntentContract {
     /**
      * Collect anti-hotlink request headers forwarded by the phone app.
      */
-    fun readHeaders(intent: Intent): Map<String, String> = buildHeaders(
-        referer = intent.getStringExtra(EXTRA_HEADER_REFERER),
-        userAgent = intent.getStringExtra(EXTRA_HEADER_USER_AGENT),
-        cookie = intent.getStringExtra(EXTRA_HEADER_COOKIE)
-    )
+    fun readHeaders(intent: Intent): Map<String, String> {
+        val merged = parseHeadersJson(intent.getStringExtra(EXTRA_HEADERS)).toMutableMap()
+        merged.putAll(
+            buildHeaders(
+                referer = intent.getStringExtra(EXTRA_HEADER_REFERER),
+                userAgent = intent.getStringExtra(EXTRA_HEADER_USER_AGENT),
+                cookie = intent.getStringExtra(EXTRA_HEADER_COOKIE)
+            )
+        )
+        return merged
+    }
+
+    /**
+     * Pure JSON header object parser used by [readHeaders] and unit tests.
+     */
+    fun parseHeadersJson(rawHeadersJson: String?): Map<String, String> {
+        if (rawHeadersJson.isNullOrBlank()) return emptyMap()
+        val parsed = mutableMapOf<String, String>()
+        try {
+            val obj = JSONObject(rawHeadersJson)
+            val keys = obj.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                val value = obj.optString(key, "")
+                if (value.isNotBlank()) parsed[key] = value
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Invalid EXTRA_HEADERS JSON: ${e.message}")
+        }
+        return parsed
+    }
 
     /**
      * Pure header assembly. Blank / missing values are dropped.
@@ -108,13 +144,28 @@ object PlaybackIntentContract {
             when (action) {
                 ACTION_PLAY -> parsePlayIntent(intent)
                 ACTION_PLAY_QUEUE -> parsePlayQueueIntent(intent)
+                ACTION_PLAY_EPISODE -> {
+                    val index = intent.getIntExtra(EXTRA_EPISODE_INDEX, 0).coerceAtLeast(0)
+                    val posMs = readPositionMs(intent)
+                    PlaybackCommand.PlayEpisode(index = index, startPositionMs = posMs)
+                }
+                ACTION_UPDATE_EPISODE_URL -> parseUpdateEpisodeUrlIntent(intent)
                 ACTION_NEXT -> PlaybackCommand.Next
                 ACTION_PREVIOUS -> PlaybackCommand.Previous
                 ACTION_PAUSE -> PlaybackCommand.Pause
                 ACTION_RESUME -> PlaybackCommand.Resume
+                ACTION_TOGGLE_PLAY_PAUSE -> PlaybackCommand.TogglePlayPause
                 ACTION_STOP -> PlaybackCommand.Stop
                 ACTION_SEEK -> {
                     PlaybackCommand.Seek(readPositionMs(intent))
+                }
+                ACTION_SET_SPEED -> {
+                    val speed = intent.getFloatExtra(EXTRA_SPEED, 1.0f).coerceIn(0.25f, 4.0f)
+                    PlaybackCommand.SetSpeed(speed)
+                }
+                ACTION_SET_AUTO_PLAY_NEXT -> {
+                    val enabled = intent.getBooleanExtra(EXTRA_AUTO_PLAY_NEXT, true)
+                    PlaybackCommand.SetAutoPlayNext(enabled)
                 }
                 Intent.ACTION_VIEW -> {
                     // Fallback for standard Android VIEW intents (e.g. clicking a stream link)
@@ -163,7 +214,8 @@ object PlaybackIntentContract {
                     episodes.map { if (it.headers.isEmpty()) it.copy(headers = headers) else it }
                 }
                 val autoPlay = intent.getBooleanExtra(EXTRA_AUTO_PLAY_NEXT, true)
-                return PlaybackCommand.PlayQueue(queue, epIndex, startPos, autoPlay)
+                val resumeHistory = intent.getBooleanExtra(EXTRA_RESUME_FROM_HISTORY, true)
+                return PlaybackCommand.PlayQueue(queue, epIndex, startPos, autoPlay, resumeHistory)
             }
         }
 
@@ -188,11 +240,35 @@ object PlaybackIntentContract {
         )
     }
 
+    private fun parseUpdateEpisodeUrlIntent(intent: Intent): PlaybackCommand? {
+        val playUrl = intent.getStringExtra(EXTRA_PLAY_URL) ?: intent.dataString
+        if (playUrl.isNullOrBlank()) {
+            Log.w(TAG, "ACTION_UPDATE_EPISODE_URL missing EXTRA_PLAY_URL")
+            return null
+        }
+        val episodeIndex = intent.getIntExtra(EXTRA_EPISODE_INDEX, 0).coerceAtLeast(0)
+        val headers = readHeaders(intent).takeIf {
+            it.isNotEmpty() || intent.hasExtra(EXTRA_HEADERS)
+        }
+        val positionMs = if (intent.hasExtra(EXTRA_SEEK_POSITION) || intent.hasExtra(EXTRA_POSITION_MS)) {
+            readPositionMs(intent)
+        } else {
+            null
+        }
+        return PlaybackCommand.UpdateEpisodeUrl(
+            episodeIndex = episodeIndex,
+            playUrl = playUrl,
+            headers = headers,
+            positionMs = positionMs
+        )
+    }
+
     private fun parsePlayQueueIntent(intent: Intent): PlaybackCommand? {
         val rawQueue = intent.getStringExtra(EXTRA_EPISODE_QUEUE)
         val startIndex = intent.getIntExtra(EXTRA_EPISODE_INDEX, 0)
         val startPos = readPositionMs(intent)
         val autoPlay = intent.getBooleanExtra(EXTRA_AUTO_PLAY_NEXT, true)
+        val resumeHistory = intent.getBooleanExtra(EXTRA_RESUME_FROM_HISTORY, true)
 
         if (rawQueue.isNullOrBlank()) {
             // Fallback: check if single playUrl is provided
@@ -221,7 +297,8 @@ object PlaybackIntentContract {
             queue = queue,
             startIndex = startIndex,
             startPositionMs = startPos,
-            autoPlayNext = autoPlay
+            autoPlayNext = autoPlay,
+            resumeFromHistory = resumeHistory
         )
     }
 

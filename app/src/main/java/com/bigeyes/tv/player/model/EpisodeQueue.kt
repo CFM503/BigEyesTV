@@ -94,13 +94,21 @@ class EpisodeQueue(
     }
 
     /**
-     * Update episode stream URL dynamically.
-     * Essential for handling expired temporary/ephemeral CDN tokens.
+     * Update episode stream URL (and optionally request headers) dynamically.
+     * Essential for resolving deferred episodes or expired temporary CDN tokens.
      */
-    fun updateEpisodeUrl(index: Int, newUrl: String): Boolean {
+    @JvmOverloads
+    fun updateEpisodeUrl(
+        index: Int,
+        newUrl: String,
+        newHeaders: Map<String, String>? = null
+    ): Boolean {
         if (index in _episodes.indices) {
             val old = _episodes[index]
-            _episodes[index] = old.copy(playUrl = newUrl)
+            _episodes[index] = old.copy(
+                playUrl = newUrl,
+                headers = newHeaders ?: old.headers
+            )
             return true
         }
         return false

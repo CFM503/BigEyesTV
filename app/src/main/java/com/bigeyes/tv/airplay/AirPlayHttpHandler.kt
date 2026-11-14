@@ -149,6 +149,9 @@ class AirPlayHttpHandler(
         if (value == 0.0) {
             playerManager.pause()
         } else {
+            if (value > 0.0 && value != 1.0) {
+                playerManager.setPlaybackSpeed(value.toFloat().coerceIn(0.25f, 4.0f))
+            }
             playerManager.resume()
         }
 
@@ -297,7 +300,7 @@ class AirPlayHttpHandler(
         // 1. If Content-Length header is present, read raw bytes directly from inputStream
         val lenStr = session.headers["content-length"]
         val len = lenStr?.toIntOrNull() ?: 0
-        if (len > 0) {
+        if (len in 1..4_194_304) {
             try {
                 val buffer = ByteArray(len)
                 var totalRead = 0
@@ -318,27 +321,33 @@ class AirPlayHttpHandler(
         val files = HashMap<String, String>()
         try {
             session.parseBody(files)
-        } catch (e: Exception) {
-            Log.w(TAG, "Error in parseBody: ${e.message}")
-        }
-
-        for ((_, value) in files) {
-            if (!value.isNullOrBlank()) {
-                val tempFile = File(value)
-                if (tempFile.exists() && tempFile.isFile) {
-                    try {
-                        val bytes = tempFile.readBytes()
-                        if (bytes.isNotEmpty()) return bytes
-                    } catch (e: Exception) {
-                        // ignore
+            for ((_, value) in files) {
+                if (!value.isNullOrBlank()) {
+                    val tempFile = File(value)
+                    if (tempFile.exists() && tempFile.isFile) {
+                        try {
+                            val bytes = tempFile.readBytes()
+                            if (bytes.isNotEmpty()) return bytes
+                        } catch (_: Exception) {
+                        }
                     }
                 }
             }
-        }
 
-        val postData = files["content"] ?: files["postData"]
-        if (!postData.isNullOrBlank()) {
-            return postData.toByteArray(Charsets.UTF_8)
+            val postData = files["content"] ?: files["postData"]
+            if (!postData.isNullOrBlank()) {
+                return postData.toByteArray(Charsets.UTF_8)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error in parseBody: ${e.message}")
+        } finally {
+            files.values.forEach { filePath ->
+                try {
+                    val f = File(filePath)
+                    if (f.exists() && f.isFile) f.delete()
+                } catch (_: Exception) {
+                }
+            }
         }
 
         return ByteArray(0)

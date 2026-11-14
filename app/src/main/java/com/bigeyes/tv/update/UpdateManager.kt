@@ -36,6 +36,8 @@ class UpdateManager(private val context: Context) {
 
     private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
+    private var registeredApplication: Application? = null
+    private var lifecycleCallback: Application.ActivityLifecycleCallbacks? = null
 
     companion object {
         private const val TAG = "UpdateManager"
@@ -137,7 +139,8 @@ class UpdateManager(private val context: Context) {
     private fun ensureLifecycleObserver(activity: Activity) {
         if (!isLifecycleRegistered) {
             isLifecycleRegistered = true
-            activity.application.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
+            val app = activity.application
+            val callback = object : Application.ActivityLifecycleCallbacks {
                 override fun onActivityResumed(act: Activity) {
                     checkAndResumePendingInstall(act)
                 }
@@ -146,9 +149,35 @@ class UpdateManager(private val context: Context) {
                 override fun onActivityPaused(act: Activity) {}
                 override fun onActivityStopped(act: Activity) {}
                 override fun onActivitySaveInstanceState(act: Activity, outState: Bundle) {}
-                override fun onActivityDestroyed(act: Activity) {}
-            })
+                override fun onActivityDestroyed(act: Activity) {
+                    if (act === activity) {
+                        unregisterLifecycleObserver()
+                    }
+                }
+            }
+            registeredApplication = app
+            lifecycleCallback = callback
+            app.registerActivityLifecycleCallbacks(callback)
         }
+    }
+
+    fun unregisterLifecycleObserver() {
+        val cb = lifecycleCallback
+        val app = registeredApplication
+        if (cb != null && app != null) {
+            try {
+                app.unregisterActivityLifecycleCallbacks(cb)
+            } catch (_: Exception) {
+            }
+        }
+        lifecycleCallback = null
+        registeredApplication = null
+        isLifecycleRegistered = false
+    }
+
+    fun shutdown() {
+        unregisterLifecycleObserver()
+        executor.shutdownNow()
     }
 
     fun checkAndResumePendingInstall(activity: Activity) {
@@ -211,10 +240,12 @@ class UpdateManager(private val context: Context) {
      * Asynchronously checks GitHub Releases API for updates.
      */
     fun checkForUpdates(listener: UpdateCheckListener) {
+        if (executor.isShutdown) return
         executor.execute {
+            var conn: HttpURLConnection? = null
             try {
                 val url = URL(GITHUB_RELEASE_API)
-                val conn = (url.openConnection() as HttpURLConnection).apply {
+                conn = (url.openConnection() as HttpURLConnection).apply {
                     requestMethod = "GET"
                     connectTimeout = 8000
                     readTimeout = 8000
@@ -289,6 +320,11 @@ class UpdateManager(private val context: Context) {
             } catch (e: Exception) {
                 Log.e(TAG, "Check update exception: ${e.message}", e)
                 postOnMain { listener.onError("检查更新失败: ${e.message ?: "网络连接异常"}") }
+            } finally {
+                try {
+                    conn?.disconnect()
+                } catch (_: Exception) {
+                }
             }
         }
     }

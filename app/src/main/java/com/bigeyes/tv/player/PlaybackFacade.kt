@@ -49,7 +49,8 @@ interface PlaybackFacade {
         queue: List<Episode>,
         startIndex: Int = 0,
         startPositionMs: Long = 0L,
-        autoPlayNext: Boolean = true
+        autoPlayNext: Boolean = true,
+        resumeFromHistory: Boolean = true
     ) {
         if (queue.isNotEmpty() && startIndex in queue.indices) {
             val ep = queue[startIndex]
@@ -60,6 +61,18 @@ interface PlaybackFacade {
     fun playEpisode(index: Int, startPositionMs: Long = 0L) {
         seekTo(startPositionMs)
     }
+
+    fun updateEpisodeUrl(
+        index: Int,
+        playUrl: String,
+        headers: Map<String, String>? = null,
+        positionMs: Long? = null
+    ): Boolean = false
+
+    fun togglePlayPause() {}
+    fun setAutoPlayNext(enabled: Boolean) {}
+    fun retry() {}
+    fun cancelCountdown() {}
 
     fun setPlaybackSpeed(speed: Float) {}
     fun getPlaybackSpeed(): Float = 1.0f

@@ -8,7 +8,7 @@ import com.bigeyes.tv.utils.VolumeController
 
 /** Deterministic [DeviceIdentity] so the DLNA description can be asserted without a Context. */
 class FakeDeviceIdentity(
-    override val deviceName: String = "BigEyesTV (test)",
+    override var deviceName: String = "BigEyesTV (test)",
     override val deviceId: String = "AA:BB:CC:DD:EE:FF",
     override val udn: String = "uuid:aa-bb-cc-dd-ee-ff"
 ) : DeviceIdentity
@@ -44,12 +44,14 @@ class FakePlayback : PlaybackFacade {
     var trackIndex: Int = 1
     var speed: Float = 1.0f
     var queue: List<Episode> = emptyList()
+    var autoPlayNextEnabled: Boolean = true
+    var lastResumeFromHistory: Boolean? = null
+    var lastUpdatedHeaders: Map<String, String> = emptyMap()
 
     override var currentUrl: String? = null
         private set
 
     override var currentState: PlayerState = PlayerState.IDLE
-        private set
 
     override fun play(url: String, startPositionMs: Long, title: String?) {
         calls += "play:$url:$startPositionMs:${title ?: ""}"
@@ -124,14 +126,47 @@ class FakePlayback : PlaybackFacade {
         queue: List<Episode>,
         startIndex: Int,
         startPositionMs: Long,
-        autoPlayNext: Boolean
+        autoPlayNext: Boolean,
+        resumeFromHistory: Boolean
     ) {
         calls += "playQueue:${queue.size} episodes:index $startIndex:${startPositionMs}ms"
         this.queue = queue
+        this.autoPlayNextEnabled = autoPlayNext
+        this.lastResumeFromHistory = resumeFromHistory
         if (queue.isNotEmpty() && startIndex in queue.indices) {
             val ep = queue[startIndex]
             play(ep.playUrl, startPositionMs, ep.toDisplayTitle())
         }
+    }
+
+    override fun updateEpisodeUrl(
+        index: Int,
+        playUrl: String,
+        headers: Map<String, String>?,
+        positionMs: Long?
+    ): Boolean {
+        calls += "updateEpisodeUrl:$index:$playUrl:${positionMs ?: -1}"
+        lastUpdatedHeaders = headers.orEmpty()
+        currentUrl = playUrl
+        return true
+    }
+
+    override fun togglePlayPause() {
+        calls += "togglePlayPause"
+        if (playing) pause() else resume()
+    }
+
+    override fun setAutoPlayNext(enabled: Boolean) {
+        calls += "setAutoPlayNext:$enabled"
+        autoPlayNextEnabled = enabled
+    }
+
+    override fun retry() {
+        calls += "retry"
+    }
+
+    override fun cancelCountdown() {
+        calls += "cancelCountdown"
     }
 
     override fun setPlaybackSpeed(speed: Float) {

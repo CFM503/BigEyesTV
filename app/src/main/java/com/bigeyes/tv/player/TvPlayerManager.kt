@@ -100,7 +100,7 @@ class TvPlayerManager private constructor(private val context: Context) : Playba
                 } else if (session.playbackState == PlaybackState.STOPPED) {
                     listeners.forEach { it.onPlaybackStopped() }
                 } else if (session.playbackState == PlaybackState.ERROR) {
-                    listeners.forEach { it.onError(session.errorMessage ?: "鎾斁鍑洪敊") }
+                    listeners.forEach { it.onError(session.errorMessage ?: "播放出错") }
                 }
 
                 previousSession = session
@@ -150,8 +150,20 @@ class TvPlayerManager private constructor(private val context: Context) : Playba
         controller.dispatch(PlaybackCommand.Resume)
     }
 
-    fun togglePlayPause() {
+    override fun togglePlayPause() {
         controller.dispatch(PlaybackCommand.TogglePlayPause)
+    }
+
+    override fun setAutoPlayNext(enabled: Boolean) {
+        controller.dispatch(PlaybackCommand.SetAutoPlayNext(enabled))
+    }
+
+    override fun retry() {
+        controller.dispatch(PlaybackCommand.Retry)
+    }
+
+    override fun cancelCountdown() {
+        controller.dispatch(PlaybackCommand.CancelCountdown)
     }
 
     override fun seekTo(positionMs: Long) {
@@ -168,32 +180,37 @@ class TvPlayerManager private constructor(private val context: Context) : Playba
 
     /**
      * Preloads next URL. If an episode queue is present, updates next episode's playUrl;
-     * otherwise prepares nextUrl for playback.
+     * otherwise appends the next episode or keeps [nextUrl] as fallback.
      */
     override fun setNextUrl(url: String?) {
         Log.i(TAG, "TvPlayerManager.setNextUrl: $url")
         nextUrl = url
-        if (!url.isNullOrBlank()) {
+        if (url.isNullOrBlank()) return
+
+        val applyOnMain = {
             val queue = controller.episodeQueue
             val nextIndex = queue.currentIndex + 1
             if (nextIndex < queue.size) {
                 queue.updateEpisodeUrl(nextIndex, url)
-            } else if (queue.isEmpty || queue.size == 1) {
-                // If queue only has 1 episode, append the next episode dynamically
+            } else if (queue.size > 0) {
                 val current = queue.current()
                 val nextEp = Episode(
                     seriesId = current?.seriesId ?: "stream_series",
                     seriesTitle = current?.seriesTitle ?: "连续播放",
                     seasonNumber = current?.seasonNumber ?: 1,
-                    episodeNumber = (current?.episodeNumber ?: 1) + 1,
+                    episodeNumber = (current?.episodeNumber ?: queue.size) + 1,
                     episodeTitle = "下一集",
                     episodeIndex = queue.size,
                     playUrl = url
                 )
-                val newQueue = queue.episodes + nextEp
-                queue.setQueue(newQueue, queue.currentIndex)
-                controller.dispatch(PlaybackCommand.SetAutoPlayNext(true))
+                queue.setQueue(queue.episodes + nextEp, queue.currentIndex)
             }
+            controller.dispatch(PlaybackCommand.SetAutoPlayNext(true))
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            applyOnMain()
+        } else {
+            mainHandler.post(applyOnMain)
         }
     }
 
@@ -201,7 +218,8 @@ class TvPlayerManager private constructor(private val context: Context) : Playba
         queue: List<Episode>,
         startIndex: Int,
         startPositionMs: Long,
-        autoPlayNext: Boolean
+        autoPlayNext: Boolean,
+        resumeFromHistory: Boolean
     ) {
         if (queue.isEmpty()) return
         val safeIndex = startIndex.coerceIn(0, queue.size - 1)
@@ -211,10 +229,32 @@ class TvPlayerManager private constructor(private val context: Context) : Playba
                 queue = queue,
                 startIndex = safeIndex,
                 startPositionMs = startPositionMs,
-                autoPlayNext = autoPlayNext
+                autoPlayNext = autoPlayNext,
+                resumeFromHistory = resumeFromHistory
             )
         )
         bringActivityToFront()
+    }
+
+    override fun updateEpisodeUrl(
+        index: Int,
+        playUrl: String,
+        headers: Map<String, String>?,
+        positionMs: Long?
+    ): Boolean {
+        if (index < 0 || index >= controller.episodeQueue.size) return false
+        if (index == controller.episodeQueue.currentIndex && playUrl.isNotBlank()) {
+            currentUrl = playUrl
+        }
+        controller.dispatch(
+            PlaybackCommand.UpdateEpisodeUrl(
+                episodeIndex = index,
+                playUrl = playUrl,
+                headers = headers,
+                positionMs = positionMs
+            )
+        )
+        return true
     }
 
     override fun playEpisode(index: Int, startPositionMs: Long) {
@@ -307,7 +347,7 @@ class TvPlayerManager private constructor(private val context: Context) : Playba
     override fun currentTrackIndex(): Int = controller.session.value.currentIndex + 1
 
     fun manualRetry() {
-        controller.dispatch(PlaybackCommand.Retry)
+        retry()
     }
 
     companion object {

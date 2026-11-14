@@ -125,7 +125,7 @@ class DlnaActionHandler(
     </specVersion>
     <device>
         <deviceType>urn:schemas-upnp-org:device:MediaRenderer:1</deviceType>
-        <friendlyName>${deviceIdentity.deviceName}</friendlyName>
+        <friendlyName>${escapeXml(deviceIdentity.deviceName)}</friendlyName>
         <manufacturer>BigEyes</manufacturer>
         <manufacturerURL>https://github.com/bigeyes-tv</manufacturerURL>
         <modelDescription>BigEyes TV Wireless Media Renderer</modelDescription>
@@ -241,7 +241,8 @@ class DlnaActionHandler(
                     ""
                 }
                 val title = if (metadata.isNotBlank()) {
-                    extractXmlTagValue(metadata, "dc:title") ?: extractXmlTagValue(metadata, "title")
+                    (extractXmlTagValue(metadata, "dc:title") ?: extractXmlTagValue(metadata, "title"))
+                        ?.let { cleanXmlValue(it) }
                 } else null
                 Log.i(TAG, "DLNA SetAVTransportURI extracted URL: $finalUrl, title: $title")
                 if (finalUrl.isNotBlank()) {
@@ -260,7 +261,8 @@ class DlnaActionHandler(
                     ""
                 }
                 val title = if (metadata.isNotBlank()) {
-                    extractXmlTagValue(metadata, "dc:title") ?: extractXmlTagValue(metadata, "title")
+                    (extractXmlTagValue(metadata, "dc:title") ?: extractXmlTagValue(metadata, "title"))
+                        ?.let { cleanXmlValue(it) }
                 } else null
                 if (finalUrl.isNotBlank()) {
                     Log.i(TAG, "DLNA Play containing URL: $finalUrl, title: $title")
@@ -333,16 +335,18 @@ class DlnaActionHandler(
                 buildSoapResponse("GetPositionInfoResponse", "urn:schemas-upnp-org:service:AVTransport:1", innerXml)
             }
             soapAction.contains("GetTransportInfo") || body.contains("GetTransportInfo") -> {
+                val isError = playerManager.currentState == PlayerState.ERROR
                 val state = when {
+                    isError || playerManager.isEnded() || playerManager.currentState == PlayerState.IDLE -> "STOPPED"
                     playerManager.isPlaying() -> "PLAYING"
-                    playerManager.isEnded() || playerManager.currentState == PlayerState.IDLE -> "STOPPED"
                     playerManager.currentState == PlayerState.BUFFERING -> "TRANSITIONING"
                     playerManager.currentUrl != null && (playerManager.currentState == PlayerState.READY || playerManager.isReady()) -> "PAUSED_PLAYBACK"
                     else -> "STOPPED"
                 }
+                val transportStatus = if (isError) "ERROR_OCCURRED" else "OK"
                 val innerXml = """
                     <CurrentTransportState>$state</CurrentTransportState>
-                    <CurrentTransportStatus>OK</CurrentTransportStatus>
+                    <CurrentTransportStatus>$transportStatus</CurrentTransportStatus>
                     <CurrentSpeed>1</CurrentSpeed>
                 """.trimIndent()
                 buildSoapResponse("GetTransportInfoResponse", "urn:schemas-upnp-org:service:AVTransport:1", innerXml)
@@ -495,11 +499,12 @@ class DlnaActionHandler(
         if (cleaned.startsWith("<![CDATA[", ignoreCase = true) && cleaned.endsWith("]]>")) {
             cleaned = cleaned.substring(9, cleaned.length - 3).trim()
         }
-        return cleaned.replace("&amp;", "&")
-            .replace("&lt;", "<")
+        return cleaned.replace("&lt;", "<")
             .replace("&gt;", ">")
             .replace("&quot;", "\"")
             .replace("&apos;", "'")
+            .replace("&#39;", "'")
+            .replace("&amp;", "&")
             .trim()
     }
 
@@ -517,7 +522,7 @@ class DlnaActionHandler(
         // on Android TV may fail with Permission Denied when body size exceeds 1024 bytes).
         val lenStr = session.headers["content-length"]
         val len = lenStr?.toIntOrNull() ?: 0
-        if (len > 0) {
+        if (len in 1..4_194_304) {
             try {
                 val buffer = ByteArray(len)
                 var totalRead = 0
@@ -538,16 +543,24 @@ class DlnaActionHandler(
         val files = HashMap<String, String>()
         try {
             session.parseBody(files)
+            val postData = files["content"] ?: files["postData"]
+            if (!postData.isNullOrBlank()) {
+                val file = File(postData)
+                if (file.exists() && file.isFile) {
+                    return try { file.readText(Charsets.UTF_8) } catch (e: Exception) { postData }
+                }
+                return postData
+            }
         } catch (e: Exception) {
             Log.w(TAG, "parseBody error: ${e.message}")
-        }
-        val postData = files["content"] ?: files["postData"]
-        if (!postData.isNullOrBlank()) {
-            val file = File(postData)
-            if (file.exists() && file.isFile) {
-                return try { file.readText(Charsets.UTF_8) } catch (e: Exception) { postData }
+        } finally {
+            files.values.forEach { filePath ->
+                try {
+                    val f = File(filePath)
+                    if (f.exists() && f.isFile) f.delete()
+                } catch (_: Exception) {
+                }
             }
-            return postData
         }
         return ""
     }

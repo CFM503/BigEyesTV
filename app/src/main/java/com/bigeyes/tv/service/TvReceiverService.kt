@@ -7,6 +7,11 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.wifi.WifiManager
 import android.os.Binder
 import android.os.Build
@@ -14,6 +19,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import com.bigeyes.tv.R
 import com.bigeyes.tv.airplay.AirPlayDiscoveryService
 import com.bigeyes.tv.dlna.SsdpServer
@@ -36,6 +42,8 @@ class TvReceiverService : Service(), TvPlayerListener {
     private var multicastLock: WifiManager.MulticastLock? = null
 
     private lateinit var notificationManager: NotificationManager
+    private var connectivityManager: ConnectivityManager? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     inner class LocalBinder : Binder() {
         fun getService(): TvReceiverService = this@TvReceiverService
@@ -46,13 +54,28 @@ class TvReceiverService : Service(), TvPlayerListener {
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "TvReceiverService onCreate")
+        // Ensure NanoHTTPD temp file creation uses app-writable cacheDir rather than /tmp
+        try {
+            System.setProperty("java.io.tmpdir", cacheDir.absolutePath)
+        } catch (e: Exception) {
+            Log.w(TAG, "Unable to override java.io.tmpdir: ${e.message}")
+        }
+
         notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        startForeground(NOTIFICATION_ID, buildNotification("等待投屏中", "AirPlay & DLNA 在线"))
+        val initialNotification = buildNotification("等待投屏中", "AirPlay & DLNA & 伴侣协议启动中")
+        val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+        } else {
+            0
+        }
+        ServiceCompat.startForeground(this, NOTIFICATION_ID, initialNotification, fgsType)
+
         acquireLocks()
         startServers()
+        registerNetworkMonitor()
 
         TvPlayerManager.getInstance(this).addListener(this)
-        isRunning = true
+        notifyServiceStateChanged()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -61,19 +84,31 @@ class TvReceiverService : Service(), TvPlayerListener {
             stopSelf()
             return START_NOT_STICKY
         }
+        if (action == ACTION_REFRESH_SERVERS) {
+            Log.i(TAG, "Refreshing TV receiver servers and network bindings...")
+            stopServers()
+            startServers()
+        }
         updateNotificationStatus()
+        notifyServiceStateChanged()
         return START_STICKY
     }
 
     override fun onDestroy() {
         Log.i(TAG, "TvReceiverService onDestroy")
         isRunning = false
+        httpServerOnline = false
+        dlnaOnline = false
+        airPlayOnline = false
+        unregisterNetworkMonitor()
         TvPlayerManager.getInstance(this).removeListener(this)
         stopServers()
         releaseLocks()
         // The service is the long-lived owner of the playback pipeline; tear it down here so
         // the ExoPlayer instance and its progress/status coroutines do not outlive the server.
         TvPlayerManager.getInstance(this).release()
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        notifyServiceStateChanged()
         super.onDestroy()
     }
 
@@ -119,13 +154,17 @@ class TvReceiverService : Service(), TvPlayerListener {
 
     private fun startServers() {
         val playerManager = TvPlayerManager.getInstance(this)
+        lastServerError = null
 
         try {
             httpServer = TvHttpServer(this, playerManager, SERVER_PORT).apply {
                 start(5000, false)
             }
+            httpServerOnline = true
             Log.i(TAG, "TvHttpServer started on port $SERVER_PORT")
         } catch (e: Exception) {
+            httpServerOnline = false
+            lastServerError = e.message ?: "端口 $SERVER_PORT 启动失败"
             Log.e(TAG, "Failed to start TvHttpServer on port $SERVER_PORT", e)
         }
 
@@ -133,8 +172,10 @@ class TvReceiverService : Service(), TvPlayerListener {
             airPlayDiscovery = AirPlayDiscoveryService(this, SERVER_PORT).apply {
                 start()
             }
+            airPlayOnline = true
             Log.i(TAG, "AirPlayDiscoveryService started.")
         } catch (e: Exception) {
+            airPlayOnline = false
             Log.e(TAG, "Failed to start AirPlayDiscoveryService", e)
         }
 
@@ -142,32 +183,84 @@ class TvReceiverService : Service(), TvPlayerListener {
             ssdpServer = SsdpServer(this, SERVER_PORT).apply {
                 start()
             }
+            dlnaOnline = true
             Log.i(TAG, "SsdpServer started.")
         } catch (e: Exception) {
+            dlnaOnline = false
             Log.e(TAG, "Failed to start SsdpServer", e)
         }
+
+        isRunning = httpServerOnline
+        notifyServiceStateChanged()
     }
 
     private fun stopServers() {
         try {
             airPlayDiscovery?.stop()
             airPlayDiscovery = null
-        } catch (e: Exception) {
-            // ignore
+        } catch (_: Exception) {
         }
+        airPlayOnline = false
 
         try {
             ssdpServer?.stop()
             ssdpServer = null
-        } catch (e: Exception) {
-            // ignore
+        } catch (_: Exception) {
         }
+        dlnaOnline = false
 
         try {
             httpServer?.stop()
             httpServer = null
+        } catch (_: Exception) {
+        }
+        httpServerOnline = false
+        isRunning = false
+    }
+
+    private fun registerNetworkMonitor() {
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+            connectivityManager = cm
+            val request = NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
+            val callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    ssdpServer?.refreshNetworkBinding()
+                    updateNotificationStatus()
+                    notifyServiceStateChanged()
+                }
+
+                override fun onLost(network: Network) {
+                    updateNotificationStatus()
+                    notifyServiceStateChanged()
+                }
+            }
+            cm.registerNetworkCallback(request, callback)
+            networkCallback = callback
         } catch (e: Exception) {
-            // ignore
+            Log.w(TAG, "Failed to register network callback: ${e.message}")
+        }
+    }
+
+    private fun unregisterNetworkMonitor() {
+        try {
+            networkCallback?.let { connectivityManager?.unregisterNetworkCallback(it) }
+        } catch (_: Exception) {
+        } finally {
+            networkCallback = null
+            connectivityManager = null
+        }
+    }
+
+    private fun notifyServiceStateChanged() {
+        try {
+            val intent = Intent(ACTION_SERVICE_STATUS_CHANGED).apply {
+                setPackage(packageName)
+            }
+            sendBroadcast(intent)
+        } catch (_: Exception) {
         }
     }
 
@@ -268,17 +361,46 @@ class TvReceiverService : Service(), TvPlayerListener {
         const val SERVER_PORT = 7000
         const val ACTION_START = "com.bigeyes.tv.action.START"
         const val ACTION_STOP = "com.bigeyes.tv.action.STOP"
+        const val ACTION_REFRESH_SERVERS = "com.bigeyes.tv.action.REFRESH_SERVERS"
+        const val ACTION_SERVICE_STATUS_CHANGED = "com.bigeyes.tv.action.SERVICE_STATUS_CHANGED"
         private const val CHANNEL_ID = "bigeyes_tv_channel"
         private const val NOTIFICATION_ID = 1001
 
-        /** True while the DLNA/AirPlay receiver servers are up. */
+        /** True while the HTTP receiver server on port 7000 is up. */
         @Volatile
         var isRunning: Boolean = false
+            private set
+
+        @Volatile
+        var httpServerOnline: Boolean = false
+            private set
+
+        @Volatile
+        var dlnaOnline: Boolean = false
+            private set
+
+        @Volatile
+        var airPlayOnline: Boolean = false
+            private set
+
+        @Volatile
+        var lastServerError: String? = null
             private set
 
         fun start(context: Context) {
             val intent = Intent(context, TvReceiverService::class.java).apply {
                 action = ACTION_START
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+
+        fun refreshServers(context: Context) {
+            val intent = Intent(context, TvReceiverService::class.java).apply {
+                action = ACTION_REFRESH_SERVERS
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)

@@ -30,8 +30,10 @@ class BootReceiver : BroadcastReceiver() {
                 }
                 ContextCompat.startForegroundService(context, serviceIntent)
                 Log.i(TAG, "TvReceiverService started successfully on boot.")
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to start TvReceiverService on boot", e)
+            } catch (e: Throwable) {
+                // Android 14+ restricts starting mediaPlayback FGS directly from BOOT_COMPLETED;
+                // launching MainActivity will still start TvReceiverService when user opens the app.
+                Log.w(TAG, "OS prevented starting TvReceiverService on boot (${e.javaClass.simpleName}): ${e.message}")
             }
         }
     }
